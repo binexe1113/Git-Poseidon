@@ -87,6 +87,8 @@ impl Fixture {
             "--initial-branch=main",
             &format!("--object-format={format}"),
         ]);
+        // Tests install their own hooks; never copy host init templates.
+        std::fs::create_dir_all(fixture.root.join(".git/hooks")).unwrap();
         fixture.git(&["config", "user.name", "Poseidon Test"]);
         fixture.git(&["config", "user.email", "test@example.invalid"]);
         fixture.git(&["config", "commit.gpgsign", "false"]);
@@ -99,7 +101,11 @@ impl Fixture {
         self.assert_owned();
         let mut cmd = Command::new("git");
         for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
+            if name
+                .to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("GIT_")
+            {
                 cmd.env_remove(name);
             }
         }

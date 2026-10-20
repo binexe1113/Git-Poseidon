@@ -26,22 +26,26 @@ pub(crate) fn identity(location: &RepositoryLocation) -> Result<RepoIdentity> {
     let meta = std::fs::metadata(&location.common_dir).map_err(|_| unavailable())?;
     // Persisting trust requires an identity that changes when a directory is recreated.
     // Missing birth time must not fall back to path or inode alone (inode reuse).
-    let birth = meta
-        .created()
-        .map_err(|_| unavailable())?
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| unavailable())?;
+    let birth = birth_stamp(meta.created())?;
     #[cfg(unix)]
     let file_id = {
         use std::os::unix::fs::MetadataExt;
-        format!("{}:{}:{}", meta.dev(), meta.ino(), birth.as_nanos())
+        format!("{}:{}:{}", meta.dev(), meta.ino(), birth)
     };
     #[cfg(not(unix))]
-    let file_id = format!("created:{}", birth.as_nanos());
+    let file_id = format!("created:{birth}");
     Ok(RepoIdentity {
         common_dir: path_key(&location.common_dir),
         file_id,
     })
+}
+
+fn birth_stamp(created: std::io::Result<SystemTime>) -> Result<u128> {
+    created
+        .map_err(|_| unavailable())?
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|_| unavailable())
 }
 
 /// Lossless text for any path: UTF-8 as is, otherwise the bytes in hex.
@@ -229,4 +233,49 @@ fn unavailable() -> AppError {
         ErrorCode::CommandFailed,
         "Não foi possível ler ou gravar as permissões de confiança do aplicativo.",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_or_invalid_birth_time_cannot_establish_identity() {
+        assert!(birth_stamp(Err(std::io::Error::from(std::io::ErrorKind::Unsupported))).is_err());
+        assert!(birth_stamp(Ok(UNIX_EPOCH - std::time::Duration::from_secs(1))).is_err());
+        assert_eq!(
+            birth_stamp(Ok(UNIX_EPOCH + std::time::Duration::from_nanos(123))).unwrap(),
+            123
+        );
+    }
+
+    #[test]
+    fn legacy_inode_identity_never_grants_new_identity_or_hook_permissions() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("trust.json");
+        let legacy = br#"{"version":1,"repositories":[{"commonDir":"/repo/.git","fileId":"1:2","grantedAt":1,"commitHooks":true,"branchHooks":true}]}"#;
+        std::fs::write(&path, legacy).unwrap();
+        let store = TrustStore::file(path.clone());
+        let current = RepoIdentity {
+            common_dir: "/repo/.git".into(),
+            file_id: "1:2:123".into(),
+        };
+        assert!(!store.is_trusted(&current).unwrap());
+        assert!(!store.hooks_trusted(&current).unwrap());
+        assert!(!store.branch_hooks_trusted(&current).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        store.set(&current, true).unwrap();
+        let reopened = TrustStore::file(path);
+        assert!(reopened.is_trusted(&current).unwrap());
+        assert!(!reopened.hooks_trusted(&current).unwrap());
+        assert!(!reopened.branch_hooks_trusted(&current).unwrap());
+        // Same device/inode, different birth time must never inherit this grant.
+        let replacement = RepoIdentity {
+            file_id: "1:2:124".into(),
+            ..current.clone()
+        };
+        assert!(!reopened.is_trusted(&replacement).unwrap());
+        reopened.set(&current, false).unwrap();
+        assert!(!store.is_trusted(&current).unwrap());
+    }
 }
