@@ -11,8 +11,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// A repository is its common directory: the path plus the file-system identity of that
-/// directory, so another repository later placed at the same path is not trusted.
+/// A repository is its common directory, identified by path, device, inode and birth time.
+/// Device+inode alone is insufficient: filesystems can reuse the same inode immediately
+/// after deleting and recreating `.git`. If birth time is unavailable, fail closed for
+/// persistent trust instead of potentially trusting an unrelated replacement repository.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RepoIdentity {
@@ -22,19 +24,20 @@ pub(crate) struct RepoIdentity {
 
 pub(crate) fn identity(location: &RepositoryLocation) -> Result<RepoIdentity> {
     let meta = std::fs::metadata(&location.common_dir).map_err(|_| unavailable())?;
+    // Persisting trust requires an identity that changes when a directory is recreated.
+    // Missing birth time must not fall back to path or inode alone (inode reuse).
+    let birth = meta
+        .created()
+        .map_err(|_| unavailable())?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| unavailable())?;
     #[cfg(unix)]
     let file_id = {
         use std::os::unix::fs::MetadataExt;
-        format!("{}:{}", meta.dev(), meta.ino())
+        format!("{}:{}:{}", meta.dev(), meta.ino(), birth.as_nanos())
     };
-    // No stable file index in std off Unix: the creation time stands in for it.
     #[cfg(not(unix))]
-    let file_id = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| format!("created:{}", d.as_nanos()))
-        .unwrap_or_else(|| "path-only".into());
+    let file_id = format!("created:{}", birth.as_nanos());
     Ok(RepoIdentity {
         common_dir: path_key(&location.common_dir),
         file_id,
