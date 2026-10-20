@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-repository-trust"
+description = "Enables the set_repository_trust command without any pre-configured scope."
+commands.allow = ["set_repository_trust"]
+
+[[permission]]
+identifier = "deny-set-repository-trust"
+description = "Denies the set_repository_trust command without any pre-configured scope."
+commands.deny = ["set_repository_trust"]

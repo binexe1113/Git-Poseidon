@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Git-Poseidon
+GenericName=Visual Git Client
+GenericName[pt_BR]=Cliente Git visual
+Comment=Experimental visual desktop Git client
+Comment[pt_BR]=Cliente Git desktop visual experimental
+Exec=git-poseidon
+TryExec=git-poseidon
+Icon=io.gitposeidon.desktop
+Terminal=false
+Categories=Development;RevisionControl;
+Keywords=git;commit;diff;repository;
+StartupWMClass=git-poseidon
+StartupNotify=true

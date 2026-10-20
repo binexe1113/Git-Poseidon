@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stage-file"
+description = "Enables the stage_file command without any pre-configured scope."
+commands.allow = ["stage_file"]
+
+[[permission]]
+identifier = "deny-stage-file"
+description = "Denies the stage_file command without any pre-configured scope."
+commands.deny = ["stage_file"]

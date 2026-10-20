@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-branch-hook-trust"
+description = "Enables the set_branch_hook_trust command without any pre-configured scope."
+commands.allow = ["set_branch_hook_trust"]
+
+[[permission]]
+identifier = "deny-set-branch-hook-trust"
+description = "Denies the set_branch_hook_trust command without any pre-configured scope."
+commands.deny = ["set_branch_hook_trust"]

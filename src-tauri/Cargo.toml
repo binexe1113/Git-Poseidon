@@ -1,0 +1,17 @@
+[package]
+name = "git-poseidon"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+runtime-bench = ["tauri/devtools"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+poseidon-core = { path = "../crates/poseidon-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"

@@ -1,0 +1,28 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Repository inspection and explicitly authorized per-file index operations in the bundled main window.",
+  "windows": ["main"],
+  "permissions": [
+    "dialog:allow-open",
+    "allow-check-git",
+    "allow-open-repository",
+    "allow-refresh-repository",
+    "allow-get-commit",
+    "allow-get-history",
+    "allow-get-commit-files",
+    "allow-get-file-diff",
+    "allow-get-working-changes",
+    "allow-get-working-diff",
+    "allow-set-repository-trust",
+    "allow-stage-file",
+    "allow-unstage-file",
+    "allow-runtime-probe",
+    "allow-prepare-branch",
+    "allow-execute-branch",
+    "allow-set-branch-hook-trust",
+    "allow-prepare-commit",
+    "allow-create-commit",
+    "allow-set-commit-hook-trust"
+  ]
+}

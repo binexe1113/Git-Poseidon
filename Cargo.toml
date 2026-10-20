@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/poseidon-core", "src-tauri"]
+default-members = ["crates/poseidon-core"]
+resolver = "2"
+
+[workspace.package]
+license = "MIT"
+edition = "2021"
+rust-version = "1.90"
+version = "0.2.0-alpha"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt-multi-thread", "macros"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

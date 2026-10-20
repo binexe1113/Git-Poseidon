@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-commit-hook-trust"
+description = "Enables the set_commit_hook_trust command without any pre-configured scope."
+commands.allow = ["set_commit_hook_trust"]
+
+[[permission]]
+identifier = "deny-set-commit-hook-trust"
+description = "Denies the set_commit_hook_trust command without any pre-configured scope."
+commands.deny = ["set_commit_hook_trust"]

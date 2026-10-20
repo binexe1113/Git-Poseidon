@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="56" fill="#25282f"/>
+  <g fill="#55d6be">
+    <!-- Three crests form Poseidon's sea crown. -->
+    <path d="m54 55 29 15 25-35 25 35 29-15-10 46H64Z"/>
+    <!-- Temples, angular moustache and flowing, split beard. -->
+    <path d="M65 111h19v32l24 15 24-15v-32h19v42l-13 37-30 32-30-32-13-37Zm19 56 11 30 5-24Zm32 6 5 24 11-30Z" fill-rule="evenodd"/>
+    <path d="m79 120 19 5-5 10-14-6Zm58 0-19 5 5 10 14-6ZM108 131l-9 19h18Z"/>
+    <!-- Independent trident: a recognisable silhouette at small sizes. -->
+    <path d="M193 34 182 52h7v43h-12V65h-9v35l21 12v102h9V112l21-12V65h-9v30h-12V52h7Z"/>
+  </g>
+</svg>

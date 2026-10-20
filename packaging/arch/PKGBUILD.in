@@ -1,0 +1,40 @@
+# Local source snapshot; generated checksums pin the inspected working tree.
+pkgname=git-poseidon
+pkgver=0.2.0alpha
+pkgrel=1
+pkgdesc='Cliente Git desktop visual (Alpha experimental)'
+arch=('x86_64')
+license=('MIT')
+depends=('git>=2.49' 'webkit2gtk-4.1' 'gtk3' 'libsoup3' 'glib2' 'glibc' 'gcc-libs' 'cairo' 'gdk-pixbuf2' 'dbus' 'bash' 'coreutils' 'diffutils')
+makedepends=('rust>=1.90' 'nodejs>=22.12' 'npm' 'pkgconf' 'base-devel' 'desktop-file-utils')
+options=('!lto' '!debug')
+source=('git-poseidon-0.2.0-alpha-source.tar.gz')
+sha256sums=('@SOURCE_SHA256@')
+
+build() {
+  cd "$srcdir/git-poseidon-0.2.0-alpha"
+  npm ci --no-audit --no-fund
+  npm run build:desktop -- -- --locked
+}
+
+check() {
+  cd "$srcdir/git-poseidon-0.2.0-alpha"
+  desktop-file-validate packaging/linux/io.gitposeidon.desktop.desktop
+  npm run check:bindings
+  npm run check:release
+}
+
+package() {
+  cd "$srcdir/git-poseidon-0.2.0-alpha"
+  install -Dm755 target/release/git-poseidon "$pkgdir/usr/bin/git-poseidon"
+  install -Dm644 packaging/linux/io.gitposeidon.desktop.desktop "$pkgdir/usr/share/applications/io.gitposeidon.desktop.desktop"
+  for size in 32 64 128; do
+    install -Dm644 "src-tauri/icons/${size}x${size}.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/io.gitposeidon.desktop.png"
+  done
+  install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/io.gitposeidon.desktop.png"
+  install -Dm644 src-tauri/icons/poseidon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.gitposeidon.desktop.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 LICENSING.md "$pkgdir/usr/share/licenses/$pkgname/LICENSING.md"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgname/CHANGELOG.md"
+}
