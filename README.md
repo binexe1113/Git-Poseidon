@@ -1,5 +1,7 @@
 # Git-Poseidon
 
+[![CI](https://github.com/binexe1113/Git-Poseidon/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/binexe1113/Git-Poseidon/actions/workflows/build.yml)
+
 <img src="public/poseidon.svg" width="80" height="80" alt="Poseidon: coroa, barba e tridente" />
 
 Cliente Git desktop experimental com Rust, Tauri 2 e Svelte/TypeScript.
