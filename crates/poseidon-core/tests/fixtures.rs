@@ -90,3 +90,23 @@ async fn runner_passes_hostile_arguments_literally() {
     assert!(result.success);
     assert_eq!(result.stdout, b"literal bytes\n");
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn fixture_and_service_git_have_no_system_or_global_configuration() {
+    let f = Fixture::new();
+    let git = poseidon_core::process::GitProcess::discover().unwrap();
+    for scope in ["--system", "--global"] {
+        let fixture = f.output(&["config", scope, "--list"]);
+        assert!(fixture.status.success());
+        assert!(fixture.stdout.is_empty());
+        // This uses the production sanitization of GIT_* and then the test shim.
+        let service = git
+            .run(&f.root, &["config", scope, "--list"])
+            .await
+            .unwrap();
+        assert!(service.success);
+        assert!(service.stdout.is_empty());
+    }
+    assert_eq!(f.git(&["config", "--local", "user.name"]), "Poseidon Test");
+}

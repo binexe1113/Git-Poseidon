@@ -85,7 +85,7 @@ impl RepositoryService {
             | BranchAction::Rename { expected_oid, .. }
             | BranchAction::Delete { expected_oid, .. } => {
                 if !parse::valid_oid(expected_oid)
-                    || !selected.is_some_and(|b| b.oid == *expected_oid)
+                    || selected.is_none_or(|b| b.oid != *expected_oid)
                 {
                     return Err(stale());
                 }

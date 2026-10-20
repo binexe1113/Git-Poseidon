@@ -38,6 +38,9 @@ npm run build:desktop -- -- --locked
 
 O executável fica em `target/release/git-poseidon`. Os testes Git utilizam fixtures temporárias.
 
+No Linux, os executáveis de testes Rust usam HOME/configuração Git isolados e
+requerem Python 3. Veja [CI, confiança e reprodução das regressões](CI.md).
+
 ## Wayland e NVIDIA
 
 Algumas combinações de compositor, driver NVIDIA e WebKitGTK apresentam erro de protocolo na inicialização. Quando necessário, aplique o workaround somente ao processo:

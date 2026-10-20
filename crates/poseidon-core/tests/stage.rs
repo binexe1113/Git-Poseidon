@@ -537,14 +537,37 @@ async fn filters_run_only_after_trust_like_git_add() {
         );
         f.git(&["config", "filter.pointer.clean", &clean]);
         f.git(&["config", "filter.pointer.required", "true"]);
+        // Deterministic analogue of an additional host-configured driver (e.g. LFS).
+        f.git(&["config", "filter.unused.clean", &clean]);
         std::fs::write(f.root.join("asset.bin"), [0u8, 1, 2, 3, 255]).unwrap();
     }
     let service = RepositoryService::default();
     let opened = service.open(&app.root).await.unwrap();
     let (id, generation) = (opened.session_id, opened.generation);
     let untrusted = list(&service, id, generation).await;
-    assert_eq!(untrusted.filter_drivers, ["pointer"]);
+    // Other drivers (e.g. Git LFS) may also be configured.
+    // The security invariant is that our fixture's driver is discovered but not run.
+    assert!(untrusted
+        .filter_drivers
+        .iter()
+        .any(|driver| driver == "pointer"));
+    assert!(untrusted
+        .filter_drivers
+        .iter()
+        .any(|driver| driver == "unused"));
     assert!(!markers[0].exists(), "a filter ran without trust");
+    let error = service
+        .stage_file(
+            id,
+            generation,
+            untrusted.revision,
+            WorkingArea::Untracked,
+            0,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error.code, ErrorCode::TrustRequired));
+    assert!(!markers[0].exists(), "a rejected write ran the filter");
     service.set_trust(id, generation, true).await.unwrap();
     let change = stage(
         &service,
@@ -570,6 +593,52 @@ async fn filters_run_only_after_trust_like_git_add() {
         change.working.unstaged
     );
     assert_listing_current(&service, id, generation, &change).await;
+    service.set_trust(id, generation, false).await.unwrap();
+    let executions = std::fs::read(&markers[0]).unwrap();
+    let revoked = list(&service, id, generation).await;
+    assert!(!revoked.trusted);
+    assert_eq!(std::fs::read(&markers[0]).unwrap(), executions);
+    let error = service
+        .unstage_file(id, generation, revoked.revision, 0)
+        .await
+        .unwrap_err();
+    assert!(matches!(error.code, ErrorCode::TrustRequired));
+    assert_eq!(std::fs::read(&markers[0]).unwrap(), executions);
+}
+
+#[tokio::test]
+async fn repeated_repository_recreation_never_inherits_persisted_trust() {
+    let f = Fixture::new();
+    let store = f.temp.path().join("trust.json");
+    for _ in 0..24 {
+        let service = RepositoryService::with_trust(TrustStore::file(store.clone()));
+        let opened = service.open(&f.root).await.unwrap();
+        assert!(
+            !list(&service, opened.session_id, opened.generation)
+                .await
+                .trusted
+        );
+        service
+            .set_trust(opened.session_id, opened.generation, true)
+            .await
+            .unwrap();
+        // Ordinary Git directory mutations must not revoke a valid identity.
+        f.git(&["config", "test.identity", "unchanged"]);
+        assert!(
+            list(&service, opened.session_id, opened.generation)
+                .await
+                .trusted
+        );
+        std::fs::remove_dir_all(f.root.join(".git")).unwrap();
+        f.git(&["init", "-q", "--initial-branch=main"]);
+    }
+    let fresh = RepositoryService::with_trust(TrustStore::file(store));
+    let opened = fresh.open(&f.root).await.unwrap();
+    assert!(
+        !list(&fresh, opened.session_id, opened.generation)
+            .await
+            .trusted
+    );
 }
 
 #[tokio::test]

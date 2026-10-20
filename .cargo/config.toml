@@ -1,0 +1,4 @@
+# Isolate Linux test processes, including the real Git invoked by the service.
+# Examples and the desktop binary are passed through unchanged by the runner.
+[target.'cfg(target_os = "linux")']
+runner = "scripts/isolated-test-runner.sh"
