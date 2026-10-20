@@ -543,7 +543,9 @@ async fn filters_run_only_after_trust_like_git_add() {
     let opened = service.open(&app.root).await.unwrap();
     let (id, generation) = (opened.session_id, opened.generation);
     let untrusted = list(&service, id, generation).await;
-    assert_eq!(untrusted.filter_drivers, ["pointer"]);
+    // Other drivers (e.g. system-provided Git LFS) may be configured globally.
+    // The security invariant is that our fixture's driver is discovered but not run.
+    assert!(untrusted.filter_drivers.iter().any(|driver| driver == "pointer"));
     assert!(!markers[0].exists(), "a filter ran without trust");
     service.set_trust(id, generation, true).await.unwrap();
     let change = stage(
