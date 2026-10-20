@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   let {
+    label = 'Branches locais',
     x,
     y,
     items,
     onclose,
   }: {
+    label?: string;
     x: number;
     y: number;
     items: { label: string; disabled?: boolean; pick: () => void }[];
@@ -43,7 +45,7 @@
 <dialog
   bind:this={dialog}
   class="branch-menu"
-  aria-label="Operações de branches"
+  aria-label={`Operações: ${label}`}
   oncancel={(event) => {
     event.preventDefault();
     onclose();
@@ -53,7 +55,7 @@
     if (event.target === dialog) onclose();
   }}
 >
-  <div role="menu" aria-label="Branches locais">
+  <div role="menu" aria-label={label}>
     {#each items as item}<button
         type="button"
         role="menuitem"

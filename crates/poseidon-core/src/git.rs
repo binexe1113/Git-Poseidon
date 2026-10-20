@@ -1,5 +1,6 @@
 pub(crate) mod branches;
 pub(crate) mod commit;
+pub(crate) mod stash;
 use crate::{
     diff,
     domain::*,

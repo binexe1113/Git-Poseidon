@@ -5,6 +5,14 @@ fn declarations() -> String {
     let config = Config::default();
     let declarations = [
         GitInstallation::decl(&config),
+        StashSelection::decl(&config),
+        StashEntry::decl(&config),
+        StashList::decl(&config),
+        StashListResponse::decl(&config),
+        StashAction::decl(&config),
+        StashPlan::decl(&config),
+        StashPlanResponse::decl(&config),
+        StashDetailsResponse::decl(&config),
         BranchAction::decl(&config),
         BranchPlan::decl(&config),
         BranchPlanResponse::decl(&config),

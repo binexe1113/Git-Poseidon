@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StashPanel from './features/stash/StashPanel.svelte';
   import { onMount, tick } from 'svelte';
   import Icon from './lib/ui/Icon.svelte';
   import BranchDialog from './features/branches/BranchDialog.svelte';
@@ -976,6 +977,22 @@
     </div>
 
     <div class="sidebar-rule"></div>
+    {#if snapshot}
+      {#key snapshot.sessionId}
+        <StashPanel
+          sessionId={snapshot.sessionId}
+          generation={snapshot.generation}
+          disabled={loading ||
+            branchBusy ||
+            commitBusy ||
+            !!indexBusy ||
+            !!branchIntent ||
+            !!indexDialog}
+          onbusy={(busy) => (branchBusy = busy)}
+          onchanged={branchChanged}
+        />
+      {/key}
+    {/if}
     <div class="sidebar-section branches-section">
       <div class="section-label">
         <span class="label-with-icon"

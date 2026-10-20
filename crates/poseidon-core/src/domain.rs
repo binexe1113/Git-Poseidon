@@ -590,3 +590,81 @@ pub struct BranchChangeResponse {
     pub generation: u32,
     pub data: BranchChange,
 }
+
+/// Position is only a hint; revision and OID are resolved and checked in Rust.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashSelection {
+    pub revision: u32,
+    pub index: u32,
+    pub oid: String,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub selection: StashSelection,
+    pub reference: String,
+    pub message: String,
+    pub timestamp: String,
+    pub branch: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashList {
+    pub entries: Vec<StashEntry>,
+    pub has_more: bool,
+    pub elapsed_ms: u32,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashListResponse {
+    pub schema_version: u32,
+    pub session_id: u32,
+    pub generation: u32,
+    pub data: StashList,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum StashAction {
+    Create {
+        message: String,
+        include_untracked: bool,
+    },
+    Apply {
+        selection: StashSelection,
+        restore_index: bool,
+    },
+    Drop {
+        selection: StashSelection,
+    },
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashPlan {
+    pub token: u32,
+    pub action: StashAction,
+    pub paths: Vec<String>,
+    pub trusted: bool,
+    pub block: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashPlanResponse {
+    pub schema_version: u32,
+    pub session_id: u32,
+    pub generation: u32,
+    pub data: StashPlan,
+}
+/// Each layer reuses the bounded, immutable commit diff contract.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StashDetailsResponse {
+    pub schema_version: u32,
+    pub session_id: u32,
+    pub generation: u32,
+    pub data: Vec<CommitFiles>,
+}
