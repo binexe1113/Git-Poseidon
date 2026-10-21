@@ -78,8 +78,9 @@ struct WorkingList {
     head: Option<String>,
     /// HEAD commit or the empty tree: what staged files are compared with.
     base: String,
-    /// Read configuration: neutralised filter drivers when untrusted (`git::inert_filters`).
+    /// Effective configuration reviewed with this listing; inspection is always inert.
     config: Vec<(OsString, OsString)>,
+    attributes: Vec<(PathBuf, Option<String>)>,
     trusted: bool,
     write_block: Option<String>,
     drivers: Vec<String>,
@@ -90,6 +91,7 @@ struct WorkingList {
     /// Worktree stamps of every unstaged/untracked entry, by group index.
     unstaged_files: Vec<Option<FileStamp>>,
     untracked_files: Vec<Option<FileStamp>>,
+    path_stamps: std::collections::BTreeMap<Vec<u8>, Option<FileStamp>>,
 }
 
 impl WorkingList {
@@ -109,6 +111,19 @@ impl WorkingList {
         }
     }
 
+    fn visible_paths(&self) -> Vec<Vec<u8>> {
+        visible_paths(&[&self.staged, &self.unstaged, &self.untracked])
+    }
+    fn paths_current(&self, location: &RepositoryLocation, paths: &[Vec<u8>]) -> Result<bool> {
+        for path in paths {
+            let expected = self.path_stamps.get(path).ok_or_else(AppError::protocol)?;
+            if *expected != file_stamp(&worktree_path(location, path)?) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Same content and stamps: a new listing can keep the previous revision.
     fn same_as(&self, other: &WorkingList) -> bool {
         self.session == other.session
@@ -116,8 +131,12 @@ impl WorkingList {
             && self.write_block == other.write_block
             && self.head == other.head
             && self.repo == other.repo
+            && self.config == other.config
+            && self.attributes == other.attributes
+            && self.drivers == other.drivers
             && self.unstaged_files == other.unstaged_files
             && self.untracked_files == other.untracked_files
+            && self.path_stamps == other.path_stamps
             && self.staged.files == other.staged.files
             && self.unstaged.files == other.unstaged.files
             && self.untracked.files == other.untracked.files
@@ -601,7 +620,18 @@ impl RepositoryService {
             return Err(unsupported("Repositório bare não tem working tree."));
         }
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
-        self.trust.set(&trust::identity(&location)?, trusted)?;
+        let policy = if trusted {
+            Some(git::execution::filters_digest(
+                &Git::discover()?
+                    .execution_config(&location, &Cancellation::default())
+                    .await?,
+            ))
+        } else {
+            None
+        };
+        self.trust
+            .set_policy(&trust::identity(&location)?, trusted, policy)?;
+        *self.branch_plan.lock().map_err(|_| busy())? = None;
         *self.commit_plan.lock().map_err(|_| busy())? = None;
         *self.diffs.working.lock().map_err(|_| busy())? = None;
         Ok(())
@@ -656,6 +686,7 @@ impl RepositoryService {
             return Err(unsupported("Repositório bare não tem working tree."));
         }
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
+        let _trust_lease = self.trust.lease()?;
         if !self.trust.is_trusted(&trust::identity(&location)?)? {
             return Err(AppError::new(
                 ErrorCode::TrustRequired,
@@ -694,11 +725,20 @@ impl RepositoryService {
         };
         // Repository state now, not as listed.
         let git = Git::discover()?;
+        branches::ensure_location(&git, &location).await?;
+        git.ensure_write_format(&location, true).await?;
         let token = Cancellation::default();
         if let Some(reason) = git::operation_blocker(&location.git_dir) {
             return Err(unsupported(&reason));
         }
         let config = git.repo_config(&location, &token).await?;
+        if list.config.iter().any(|(key, value)| {
+            key.as_encoded_bytes().starts_with(b"hook.")
+                && key.as_encoded_bytes().ends_with(b".event")
+                && value == "post-index-change"
+        }) {
+            return Err(unsupported("Configuração hook.* para post-index-change não é suportada no index protegido. Use o terminal; nenhum hook será ignorado silenciosamente."));
+        }
         if config.index_hook {
             return Err(unsupported("Hook post-index-change ativo: operações de index ainda não suportam hooks. Use o terminal."));
         }
@@ -717,6 +757,22 @@ impl RepositoryService {
                 "Submódulos e repositórios aninhados ainda não podem ser preparados aqui.",
             ));
         }
+        if git.execution_config(&location, &token).await? != list.config {
+            return Err(changed());
+        }
+        if area != WorkingArea::Staged
+            && !self.trust.filters_allowed(
+                &trust::identity(&location)?,
+                &git::execution::filters_digest(&list.config),
+            )?
+        {
+            return Err(AppError::new(ErrorCode::TrustRequired,"A configuração de filtros mudou desde a autorização. Revogue e conceda confiança novamente para revisar os programas atuais."));
+        }
+        let paths: Vec<Vec<u8>> = change.pathspec().into_iter().map(<[u8]>::to_vec).collect();
+        // The selection must still describe every path Git will read.
+        if area != WorkingArea::Staged && !list.paths_current(&location, &paths)? {
+            return Err(changed());
+        }
         // The selection must still describe the repository.
         let path = worktree_path(&location, &change.new_path)?;
         let current = repo_stamp(&location) == list.repo
@@ -729,14 +785,61 @@ impl RepositoryService {
         if location.git_dir.join("index.lock").exists() {
             return Err(git::index_locked());
         }
-        let paths: Vec<Vec<u8>> = change.pathspec().into_iter().map(<[u8]>::to_vec).collect();
+
+        let attribute_paths = list.visible_paths();
+        if git
+            .attributes_snapshot(&location, &list.config, &attribute_paths)
+            .await?
+            != list.attributes
+        {
+            return Err(changed());
+        }
+        if area != WorkingArea::Staged {
+            git.reject_unsupported_filters(&location, &list.config, &paths, None)
+                .await?;
+        }
+        let _head_guard = git::execution::HeadGuard::acquire(&location)?;
+        let mut transaction = git::execution::IndexTransaction::acquire(&location)?;
+        git.ensure_write_format(&location, true).await?;
+        if repo_stamp(&location) != list.repo
+            || (area != WorkingArea::Staged && !list.paths_current(&location, &paths)?)
+            || list
+                .stamp(area, index as usize)
+                .is_some_and(|stamp| *stamp != file_stamp(&path))
+        {
+            return Err(changed());
+        }
         let written = match area {
             WorkingArea::Staged => {
-                git.set_index_entries(&location, &unstage_records(&location, change)?)
+                git.set_index_entries(
+                    &location,
+                    &unstage_records(&location, change)?,
+                    &transaction.index,
+                )
+                .await
+            }
+            _ => {
+                git.stage(&location, &paths, &list.config, &transaction.index)
                     .await
             }
-            _ => git.stage(&location, &paths).await,
         };
+        if written.is_ok() {
+            if repo_stamp(&location) != list.repo
+                || (area != WorkingArea::Staged && !list.paths_current(&location, &paths)?)
+                || list
+                    .stamp(area, index as usize)
+                    .is_some_and(|stamp| *stamp != file_stamp(&path))
+                || git.execution_config(&location, &token).await? != list.config
+                || git
+                    .attributes_snapshot(&location, &list.config, &attribute_paths)
+                    .await?
+                    != list.attributes
+            {
+                return Err(changed());
+            }
+            transaction.publish()?;
+        }
+        drop(transaction);
         // Success or not, the index is read again before answering.
         let relist_start = Instant::now();
         let relisted = self
@@ -774,6 +877,15 @@ impl RepositoryService {
         let mut incremental = [&previous.unstaged, &previous.untracked].iter().all(|g| {
             g.entries.len() == g.files.len() && g.entries.len() + paths.len() < DIFF_FILE_LIMIT
         });
+        if incremental
+            && (git.execution_config(location, &token).await? != previous.config
+                || git
+                    .attributes_snapshot(location, &previous.config, &previous.visible_paths())
+                    .await?
+                    != previous.attributes)
+        {
+            incremental = false;
+        }
         let mut attempt = 0;
         let listing = loop {
             let touched = incremental.then_some(Touched { previous, paths });
@@ -1075,11 +1187,7 @@ async fn read_working(
     let started = SystemTime::now();
     let before = repo_stamp(location);
     let repo_config = git.repo_config(location, token).await?;
-    let config = if trusted {
-        Vec::new()
-    } else {
-        git::inert_filters(&repo_config.drivers)?
-    };
+    let config = git.execution_config(location, token).await?;
     let head = git.head_oid(location, token).await?;
     let base = head
         .clone()
@@ -1137,9 +1245,43 @@ async fn read_working(
             (u, us, n, ns, uc.into_iter().chain(nc).collect())
         }
     };
+    let mut path_stamps = std::collections::BTreeMap::new();
+    for group in [&unstaged, &untracked] {
+        for entry in group.entries.iter().take(group.files.len()) {
+            let refreshed = touched.as_ref().is_none_or(|t| {
+                entry
+                    .pathspec()
+                    .iter()
+                    .any(|p| t.paths.iter().any(|path| path.as_slice() == *p))
+            });
+            for path in entry.pathspec() {
+                let value = if refreshed {
+                    file_stamp(&worktree_path(location, path)?)
+                } else {
+                    touched
+                        .as_ref()
+                        .ok_or_else(AppError::protocol)?
+                        .previous
+                        .path_stamps
+                        .get(path)
+                        .cloned()
+                        .ok_or_else(AppError::protocol)?
+                };
+                path_stamps.insert(path.to_vec(), value);
+            }
+        }
+    }
+    let attribute_paths = visible_paths(&[&staged, &unstaged, &untracked]);
+    let attributes = git
+        .attributes_snapshot(location, &config, &attribute_paths)
+        .await?;
     let repo = repo_stamp(location);
     let threshold = started.checked_sub(RACY_MARGIN).unwrap_or(started);
     let racy = repo != before
+        || path_stamps
+            .values()
+            .flatten()
+            .any(|s| s.modified.is_none_or(|m| m >= threshold))
         || checked
             .iter()
             .flatten()
@@ -1162,6 +1304,7 @@ async fn read_working(
             head,
             base,
             config,
+            attributes,
             trusted,
             write_block,
             drivers: repo_config
@@ -1175,9 +1318,20 @@ async fn read_working(
             repo,
             unstaged_files,
             untracked_files,
+            path_stamps,
         },
         racy,
     })
+}
+
+fn visible_paths(groups: &[&ParsedChanges]) -> Vec<Vec<u8>> {
+    groups
+        .iter()
+        .flat_map(|group| group.entries.iter().take(group.files.len()))
+        .flat_map(|entry| entry.pathspec().into_iter().map(<[u8]>::to_vec))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 type Stamper<'a> = dyn Fn(&diff::RawChange) -> Result<Option<FileStamp>> + 'a;

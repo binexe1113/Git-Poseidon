@@ -118,13 +118,17 @@
         /><span
           >{working.writeBlock ??
             (working.trusted
-              ? 'Repositório confiável: preparar e retirar liberados; filtros do Git são executados.'
+              ? 'Repositório confiável: escritas usam as definições de filtros autorizadas. Novas definições exigem renovar a confiança.'
               : 'Sem confiança: inspeção protegida. O primeiro preparo pede sua confirmação.')}</span
         >{#if working.trusted}<button
             class="text-button"
             disabled={!!busy || loading}
             onclick={onrevoke}>Revogar</button
           >{/if}
+      </p>{/if}
+    {#if working?.filterDrivers.length}<p>
+        A inspeção não executa filtros externos, mesmo com confiança. Arquivos
+        transformados por filtros podem aparecer modificados após o preparo.
       </p>{/if}
     <div class="filter-tabs" aria-label="Filtrar alterações">
       <button

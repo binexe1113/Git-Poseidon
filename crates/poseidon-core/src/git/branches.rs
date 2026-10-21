@@ -24,15 +24,14 @@ impl Git {
             .read_config(location, false, &Cancellation::default())
             .await?;
         let status = self
-            .process
-            .run_configured(
-                root,
+            .inspect(
+                location,
                 &[
                     "status",
                     "--porcelain=v2",
                     "-z",
                     "--untracked-files=all",
-                    "--ignore-submodules=none",
+                    "--ignore-submodules=dirty",
                 ],
                 &config,
                 Limits::default(),
@@ -63,41 +62,7 @@ impl Git {
                     #[cfg(not(unix))]
                     let executable = true;
                     if executable {
-                        // Bounded read, including symlink targets; hook edits invalidate plans.
-                        use std::io::Read;
-                        let mut bytes = Vec::new();
-                        if !meta.is_file() {
-                            return Err(AppError::new(
-                                ErrorCode::UnsupportedState,
-                                "Hook executável não é um arquivo regular; inspeção recusada.",
-                            ));
-                        }
-                        let mut options = std::fs::OpenOptions::new();
-                        options.read(true);
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::OpenOptionsExt;
-                            options.custom_flags(libc::O_NONBLOCK);
-                        }
-                        let file = options.open(path).map_err(|_| local_failure())?;
-                        // Validate the descriptor too: a concurrent replacement must not
-                        // turn this read-only preview into a blocking FIFO/device read.
-                        if !file.metadata().map_err(|_| local_failure())?.is_file() {
-                            return Err(AppError::new(
-                                ErrorCode::UnsupportedState,
-                                "O tipo do hook mudou durante a inspeção.",
-                            ));
-                        }
-                        file.take(1024 * 1024 + 1)
-                            .read_to_end(&mut bytes)
-                            .map_err(|_| local_failure())?;
-                        if bytes.len() > 1024 * 1024 {
-                            return Err(AppError::new(
-                                ErrorCode::OutputLimit,
-                                "Hook excede o limite de inspeção (1 MiB).",
-                            ));
-                        }
-                        hooks.push(((*name).into(), bytes));
+                        hooks.push(((*name).into(), execution::read_hook(&path)?));
                     }
                 }
                 Err(e)
@@ -196,6 +161,19 @@ impl Git {
             }
         }
         let cancel = Cancellation::default();
+        let snapshot = self.execution_config(location, &cancel).await?;
+        let mut paths = targets.iter().map(|p| p.to_vec()).collect::<Vec<_>>();
+        paths.extend(
+            self.checked(&location.root, &["ls-files", "-z"])
+                .await?
+                .split(|b| *b == 0)
+                .filter(|p| !p.is_empty())
+                .map(|p| p.to_vec()),
+        );
+        self.reject_unsupported_filters(location, &snapshot, &paths, None)
+            .await?;
+        self.reject_unsupported_filters(location, &snapshot, &paths, Some(target))
+            .await?;
         let drivers = self.repo_config(location, &cancel).await?.drivers;
         let mut config = inert_filters(&drivers)?;
         for driver in drivers {
@@ -205,9 +183,8 @@ impl Git {
             config.push((os_path(&key)?, OsString::new()));
         }
         let output = self
-            .process
-            .run_configured(
-                &location.root,
+            .inspect(
+                location,
                 &["read-tree", "--dry-run", "-m", "-u", "HEAD", target],
                 &config,
                 Limits::default(),
@@ -220,42 +197,267 @@ impl Git {
         &self,
         location: &RepositoryLocation,
         action: &BranchAction,
+        state: &BranchState,
     ) -> Result<crate::process::Output> {
-        let args: Vec<&str> = match action {
-            BranchAction::Create { name, start_oid } => {
-                vec!["branch", "--no-track", "--", name, start_oid]
-            }
-            BranchAction::Switch { name, .. } => vec![
-                "switch",
-                "--no-guess",
-                "--no-overwrite-ignore",
-                "--no-recurse-submodules",
-                "--",
-                name,
-            ],
-            BranchAction::Rename { name, new_name, .. } => {
-                vec!["branch", "-m", "--", name, new_name]
-            }
-            BranchAction::Delete { name, .. } => vec!["branch", "-d", "--", name],
+        self.ensure_write_format(location, matches!(action, BranchAction::Switch { .. }))
+            .await?;
+        let config = execution::config_records(&state.config)?;
+        if config
+            .iter()
+            .any(|(k, v)| k == "extensions.refstorage" && v == "reftable")
+        {
+            return Err(AppError::new(
+                ErrorCode::UnsupportedState,
+                "Escritas de branches com reftable ainda não têm guard compartilhado validado.",
+            ));
+        }
+        let mut context = self.execution_context(
+            location,
+            &config,
+            execution::GitExecutionPolicy::BranchWrite,
+        )?;
+        context.hooks(&state.hooks)?;
+        let limits = Limits {
+            timeout: Duration::from_secs(120),
+            ..Limits::default()
         };
-        let mut pinned: Vec<OsString> = vec![
-            "--git-dir".into(),
-            location.git_dir.as_os_str().to_owned(),
-            "--work-tree".into(),
-            location.root.as_os_str().to_owned(),
+        let cancel = Cancellation::default();
+        if let BranchAction::Create { name, start_oid } = action {
+            return self
+                .process
+                .run_input_env(
+                    &location.root,
+                    &["branch", "--no-track", "--", name, start_oid],
+                    &context.config,
+                    None,
+                    limits,
+                    &cancel,
+                    &context.env,
+                )
+                .await;
+        }
+        let mut guard_state = execution::HeadGuard::acquire(location)?;
+        let _other_heads = execution::OtherHeadGuards::acquire(location)?;
+        if self
+            .checked(&location.root, &["worktree", "list", "--porcelain", "-z"])
+            .await?
+            != state.worktrees
+        {
+            return Err(AppError::new(
+                ErrorCode::WorkingTreeChanged,
+                "O registro de worktrees mudou desde a revisão.",
+            ));
+        }
+        if head_key(&self.head(&location.root).await?) != state.head {
+            return Err(AppError::new(
+                ErrorCode::WorkingTreeChanged,
+                "HEAD mudou desde a revisão.",
+            ));
+        }
+        if let BranchAction::Switch { name, expected_oid } = action {
+            let reference = format!("refs/heads/{name}");
+            let path = execution::ref_path(location, reference.as_bytes())?;
+            let _target = execution::SharedLock::acquire(execution::lock_path(&path))?;
+            let mut index = execution::IndexTransaction::acquire(location)?;
+            if self
+                .checked(
+                    &location.root,
+                    &["show-ref", "--hash", "--verify", &reference],
+                )
+                .await?
+                .trim_ascii_end()
+                != expected_oid.as_bytes()
+                || self.index_records(location).await? != state.index
+            {
+                return Err(AppError::new(
+                    ErrorCode::WorkingTreeChanged,
+                    "Branch/index mudou desde a revisão.",
+                ));
+            }
+            context.index(&index.index);
+            let result = self
+                .process
+                .run_input_env(
+                    &location.root,
+                    &[
+                        "switch",
+                        "--no-guess",
+                        "--no-overwrite-ignore",
+                        "--no-recurse-submodules",
+                        "--",
+                        name,
+                    ],
+                    &context.config,
+                    None,
+                    limits,
+                    &cancel,
+                    &context.env,
+                )
+                .await;
+            index.publish()?;
+            let head = context.head()?;
+            if head == format!("ref: {reference}\n").as_bytes() {
+                guard_state
+                    .head_lock
+                    .publish(&location.git_dir.join("HEAD"), &head)?;
+            } else if head
+                != std::fs::read(location.git_dir.join("HEAD")).map_err(|_| local_failure())?
+            {
+                return Err(outcome_unknown());
+            }
+            return result;
+        }
+        // Native branch -m/-d accept a mutable name, not the reviewed OID.
+        // Use Git's expected-old transactions for both refs of a rename/delete.
+        let (name, expected, new_name) = match action {
+            BranchAction::Rename {
+                name,
+                expected_oid,
+                new_name,
+            } => (name, expected_oid, Some(new_name)),
+            BranchAction::Delete { name, expected_oid } => (name, expected_oid, None),
+            _ => return Err(AppError::protocol()),
+        };
+        let mut config_lock =
+            execution::SharedLock::acquire(location.common_dir.join("config.lock"))?;
+        let original_config = execution::optional_log(&location.common_dir.join("config"))?
+            .ok_or_else(local_failure)?;
+        if self.execution_config(location, &cancel).await? != config {
+            return Err(AppError::new(
+                ErrorCode::WorkingTreeChanged,
+                "Configuração mudou desde a revisão.",
+            ));
+        }
+        let local_config = context.local_config(&original_config)?;
+        let section = format!("branch.{name}");
+        let mut config_args = vec![
+            OsString::from("config"),
+            "--file".into(),
+            local_config.as_os_str().to_owned(),
         ];
-        pinned.extend(args.iter().map(OsString::from));
-        self.process
-            .run_with(
+        if let Some(new_name) = new_name {
+            config_args.extend([
+                "--rename-section".into(),
+                section.into(),
+                format!("branch.{new_name}").into(),
+            ]);
+        } else {
+            config_args.extend(["--remove-section".into(), section.into()]);
+        }
+        let changed = self
+            .process
+            .run_with(&location.root, &config_args, limits, &cancel)
+            .await?;
+        if !changed.success
+            && changed.code != Some(5)
+            && !(changed.code == Some(128)
+                && changed.stderr.starts_with(b"fatal: no such section:"))
+        {
+            return Err(local_failure());
+        }
+        let source = format!("refs/heads/{name}");
+        if guard_state.reference.as_deref() == Some(source.as_bytes()) {
+            guard_state.ref_lock.take();
+        }
+        context.guard_reference(&self.process.executable, &source)?;
+        let old_log = execution::optional_log(&location.common_dir.join("logs").join(&source))?;
+        context.guard_reflog(
+            location,
+            &source,
+            new_name.map(String::as_str),
+            old_log.as_deref(),
+        )?;
+        let mut input = String::from("start\n");
+        // HeadGuard already holds the reviewed current branch lock. Ref
+        // transactions below never mutate it except a current-branch rename.
+
+        if matches!(action, BranchAction::Delete { .. }) {
+            let branches = parse::branches(&state.refs)?;
+            if let Some(upstream) = branches
+                .iter()
+                .find(|b| b.full_ref == source)
+                .and_then(|b| b.upstream.as_ref())
+            {
+                if upstream != &source
+                    && guard_state.reference.as_deref() != Some(upstream.as_bytes())
+                {
+                    let branch = branches
+                        .iter()
+                        .find(|b| b.full_ref == *upstream)
+                        .ok_or_else(local_failure)?;
+                    input.push_str(&format!("verify {} {}\n", branch.full_ref, branch.oid));
+                }
+            }
+        }
+        if let Some(new_name) = new_name {
+            input.push_str(&format!("create refs/heads/{new_name} {expected}\n"));
+        }
+        input.push_str(&format!("delete {source} {expected}\nprepare\ncommit\n"));
+        let result = self
+            .process
+            .run_input_env(
                 &location.root,
-                &pinned,
-                Limits {
-                    timeout: Duration::from_secs(120),
-                    ..Limits::default()
-                },
-                &Cancellation::default(),
+                &[
+                    "update-ref",
+                    "--no-deref",
+                    "-m",
+                    "branch: Poseidon reviewed local branch operation",
+                    "--stdin",
+                ],
+                &context.config,
+                Some(input.as_bytes()),
+                limits,
+                &cancel,
+                &context.env,
             )
-            .await
+            .await;
+        let acknowledged = result.as_ref().is_ok_and(|output| output.success);
+        let observed = if !acknowledged {
+            let source_present = self
+                .process
+                .run(
+                    &location.root,
+                    &["show-ref", "--verify", "--quiet", &source],
+                )
+                .await?;
+            let destination_ok = if let Some(new_name) = new_name {
+                let output = self
+                    .process
+                    .run(
+                        &location.root,
+                        &[
+                            "show-ref",
+                            "--hash",
+                            "--verify",
+                            &format!("refs/heads/{new_name}"),
+                        ],
+                    )
+                    .await?;
+                output.success && output.stdout.trim_ascii_end() == expected.as_bytes()
+            } else {
+                true
+            };
+            source_present.code == Some(1) && destination_ok
+        } else {
+            false
+        };
+        if acknowledged || observed {
+            // Ref CAS succeeded. Metadata publication may still fail: the caller
+            // then reports Unknown, never retries or rolls back these refs.
+            if let Some(new_name) = new_name {
+                if state.head == format!("attached:{name}:{expected}") {
+                    guard_state.head_lock.publish(
+                        &location.git_dir.join("HEAD"),
+                        format!("ref: refs/heads/{new_name}\n").as_bytes(),
+                    )?;
+                }
+            }
+            config_lock.publish(
+                &location.common_dir.join("config"),
+                &std::fs::read(local_config).map_err(|_| local_failure())?,
+            )?;
+        }
+        result
     }
     pub(crate) async fn ancestor(&self, root: &Path, oid: &str, head: &str) -> Result<bool> {
         let output = self

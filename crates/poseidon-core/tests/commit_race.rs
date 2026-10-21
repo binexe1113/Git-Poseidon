@@ -59,6 +59,12 @@ exec "$POSEIDON_REAL_GIT" "$@"
             f.write("a", "prepared again");
             f.git(&["add", "a"]);
         }
+        let reviewed_tree = f.git(&["write-tree"]);
+        let reviewed_head = if mode == "hold-identical" {
+            Some(f.git(&["rev-parse", "HEAD"]))
+        } else {
+            None
+        };
         let service = Arc::new(RepositoryService::default());
         let opened = service.open(&f.root).await.unwrap();
         let (id, g) = (opened.session_id, opened.generation);
@@ -96,17 +102,44 @@ exec "$POSEIDON_REAL_GIT" "$@"
             }
             // A Git writer wins between application preflight and subprocess startup.
             if mode == "hold-identical" {
-                f.git(&["commit", "-m", "external writer, different message"]);
+                // Plumbing is a genuine ref writer even while the application's
+                // shared index lock prevents another porcelain commit/add.
+                let external = f.git(&[
+                    "commit-tree",
+                    &reviewed_tree,
+                    "-p",
+                    reviewed_head.as_deref().unwrap(),
+                    "-m",
+                    "external writer, different message",
+                ]);
+                let refused = f.output(&[
+                    "update-ref",
+                    "-m",
+                    "external writer",
+                    "refs/heads/main",
+                    &external,
+                    reviewed_head.as_deref().unwrap(),
+                ]);
+                assert!(
+                    !refused.status.success(),
+                    "external ref writer bypassed shared locks"
+                );
+                assert!(String::from_utf8_lossy(&refused.stderr).contains(".lock"));
             } else {
                 f.write("b", "external");
-                f.git(&["add", "b"]);
+                let refused = f.output(&["add", "b"]);
+                assert!(
+                    !refused.status.success(),
+                    "external add bypassed shared index.lock"
+                );
+                assert!(String::from_utf8_lossy(&refused.stderr).contains("index.lock"));
             }
             std::fs::write(dir.path().join("resume"), "").unwrap();
         }
         let r = task.await.unwrap().unwrap().data;
         let expected = match mode {
-            "kill-before" | "hold-identical" => CommitOutcome::Unknown,
-            "kill-after" => CommitOutcome::Created,
+            "kill-before" => CommitOutcome::Unknown,
+            "kill-after" | "hold" | "hold-identical" => CommitOutcome::Created,
             _ => CommitOutcome::Rejected,
         };
         assert_eq!(r.outcome, expected, "{mode}: {}", r.message);
@@ -116,11 +149,13 @@ exec "$POSEIDON_REAL_GIT" "$@"
         if mode == "kill-after" {
             assert_eq!(f.git(&["show", "HEAD:a"]), "prepared");
             assert!(r.message.contains("falha"));
+        } else if mode == "hold" {
+            assert_eq!(f.git(&["show", "HEAD:a"]), "prepared");
+            assert_eq!(std::fs::read(f.root.join("b")).unwrap(), b"external");
+            assert!(!f.output(&["cat-file", "-e", "HEAD:b"]).status.success());
         } else if mode == "hold-identical" {
-            assert_eq!(
-                f.git(&["log", "-1", "--format=%s"]),
-                "external writer, different message"
-            );
+            assert_eq!(f.git(&["log", "-1", "--format=%s"]), "race");
+            assert_eq!(f.git(&["show", "HEAD:a"]), "prepared again");
         } else {
             assert!(!f.root.join(".git/refs/heads/main").exists());
         }

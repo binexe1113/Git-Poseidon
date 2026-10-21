@@ -155,13 +155,17 @@
               </li>{/each}
           </ul>{/if}
         {#if plan.filters.length}<p>
-            Filtros configurados: {plan.filters.join(', ')}. A confiança do
-            repositório autoriza sua execução.
+            Filtros configurados: {plan.filters.join(', ')}. Somente as
+            definições autorizadas podem ser executadas. Git LFS deve ser usado
+            no terminal.
           </p>{/if}
         {#if plan.hooks.length}<p>
             Hooks que podem executar: {plan.hooks.join(', ')}. São programas
             externos, podem alterar arquivos e produzir efeitos que não podem
-            ser desfeitos automaticamente.
+            ser desfeitos automaticamente. A autorização vincula-se ao conteúdo
+            atual. A execução usa cópias em um contexto Git temporário; hooks
+            que dependem da localização original ou gerenciam outros metadados
+            devem ser usados no terminal.
           </p>{/if}
         {#if plan.block}<p role="status">{plan.block}</p>{/if}
         {#if !plan.trusted}<button
