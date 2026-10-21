@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix="poseidon-host-config-") as directory:
              "--test", "fixtures", "--test", "stage", "--test", "stage_race",
              "--test", "commit_creation", "--test", "commit_race", "--test", "branches",
              "--test", "stash", "--test", "stash_race", "--test", "execution_policy",
-             "--test", "execution_policy_race"],
+             "--test", "execution_policy_race", "--test", "branch_publication_race"],
             env=env, check=True,
         )
         if marker.exists():

@@ -338,7 +338,7 @@ impl RepositoryService {
         let acknowledged = result.as_ref().is_ok_and(|o| o.success);
         let expected = after
             .as_ref()
-            .is_ok_and(|s| branch_applied(&plan.action, &plan.state, s));
+            .is_ok_and(|s| branch_applied(&plan.action, &plan.state, s, &location.root));
         let unchanged = after.as_ref().is_ok_and(|s| *s == plan.state)
             && plan.files.iter().all(|(p, s)| file_stamp(p) == *s);
         let outcome = if acknowledged && expected {
@@ -384,7 +384,17 @@ impl RepositoryService {
         })
     }
 }
-fn branch_applied(action: &BranchAction, before: &BranchState, state: &BranchState) -> bool {
+fn branch_applied(
+    action: &BranchAction,
+    before: &BranchState,
+    state: &BranchState,
+    root: &Path,
+) -> bool {
+    // A new registration can still race Git's ref transaction: HEAD locks only
+    // cover existing worktrees. Never announce success across that uncertainty.
+    if other_worktrees(&state.worktrees, root) != other_worktrees(&before.worktrees, root) {
+        return false;
+    }
     let Ok(branches) = parse::branches(&state.refs) else {
         return false;
     };
@@ -423,6 +433,19 @@ fn branch_applied(action: &BranchAction, before: &BranchState, state: &BranchSta
                     .any(|b| b.full_ref == format!("refs/heads/{name}"))
         }
     }
+}
+
+fn other_worktrees<'a>(bytes: &'a [u8], root: &Path) -> Vec<&'a [u8]> {
+    let mut current = false;
+    bytes
+        .split(|b| *b == 0)
+        .filter(|record| {
+            if let Some(path) = record.strip_prefix(b"worktree ") {
+                current = path == root.as_os_str().as_encoded_bytes();
+            }
+            !current
+        })
+        .collect()
 }
 
 fn status_paths(status: &[u8]) -> Vec<Vec<u8>> {

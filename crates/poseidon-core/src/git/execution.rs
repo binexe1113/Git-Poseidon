@@ -782,7 +782,13 @@ impl Git {
 impl ExecutionContext {
     /// Git invokes this after taking its reference locks, before committing the
     /// transaction. This closes the direct-ref -> symref TOCTOU, not just detects it.
-    pub(crate) fn guard_reference(&mut self, git: &Path, reference: &str) -> Result<()> {
+    pub(crate) fn guard_reference(
+        &mut self,
+        git: &Path,
+        reference: &str,
+        location: &RepositoryLocation,
+        worktrees: &[u8],
+    ) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -795,50 +801,71 @@ impl ExecutionContext {
             std::fs::write(&hook, REFERENCE_GUARD).map_err(|_| local_failure())?;
             std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700))
                 .map_err(|_| local_failure())?;
+            let expected = self._directory.path().join("worktrees.expected");
+            std::fs::write(&expected, worktrees).map_err(|_| local_failure())?;
             self.env.extend([
                 ("POSEIDON_REF_GIT".into(), git.as_os_str().to_owned()),
                 ("POSEIDON_REF_SOURCE".into(), reference.into()),
                 ("POSEIDON_REF_DELEGATE".into(), delegate.into_os_string()),
+                ("POSEIDON_REF_WORKTREES".into(), expected.into_os_string()),
+                (
+                    "POSEIDON_REF_REAL_GIT_DIR".into(),
+                    location.git_dir.as_os_str().to_owned(),
+                ),
+                (
+                    "POSEIDON_REF_REAL_COMMON_DIR".into(),
+                    location.common_dir.as_os_str().to_owned(),
+                ),
+                (
+                    "POSEIDON_REF_REAL_WORK_TREE".into(),
+                    location.root.as_os_str().to_owned(),
+                ),
             ]);
             Ok(())
         }
         #[cfg(not(unix))]
         {
-            let _ = (git, reference);
+            let _ = (git, reference, location, worktrees);
             Err(local_failure())
         }
     }
 }
 #[cfg(unix)]
 const REFERENCE_GUARD: &str = r#"#!/bin/sh
-created=0
-if [ "$1" = prepared ]; then
+check_worktrees() {
+ # Detection under the ref locks, not a universal worktree-registration lock.
+ GIT_DIR="$POSEIDON_REF_REAL_GIT_DIR" GIT_COMMON_DIR="$POSEIDON_REF_REAL_COMMON_DIR" GIT_WORK_TREE="$POSEIDON_REF_REAL_WORK_TREE" \
+ "$POSEIDON_REF_GIT" worktree list --porcelain -z > "$POSEIDON_REF_WORKTREES.actual" || return 1
+ /usr/bin/cmp -s "$POSEIDON_REF_WORKTREES" "$POSEIDON_REF_WORKTREES.actual"
+}
+check_reference() {
+ check_worktrees || return 1
  "$POSEIDON_REF_GIT" symbolic-ref --quiet "$POSEIDON_REF_SOURCE" >/dev/null
- status=$?
- if [ "$status" != 1 ]; then exit 1; fi
+ if [ "$?" != 1 ]; then return 1; fi
  if [ "$POSEIDON_REF_LOG_EXISTS" = 1 ]; then
-  /usr/bin/cmp -s "$POSEIDON_REF_LOG_EXPECTED" "$POSEIDON_REF_LOG_SOURCE" || exit 1
+  /usr/bin/cmp -s "$POSEIDON_REF_LOG_EXPECTED" "$POSEIDON_REF_LOG_SOURCE" || return 1
  elif [ -e "$POSEIDON_REF_LOG_SOURCE" ] || [ -L "$POSEIDON_REF_LOG_SOURCE" ]; then
-  exit 1
+  return 1
  fi
  if [ -n "$POSEIDON_REF_LOG_DESTINATION" ]; then
-  if [ -e "$POSEIDON_REF_LOG_DESTINATION" ] || [ -L "$POSEIDON_REF_LOG_DESTINATION" ]; then exit 1; fi
-  if [ "$POSEIDON_REF_LOG_EXISTS" = 1 ]; then
-   # Seed history under Git's source/destination locks before it appends.
-   (set -C; /usr/bin/cat "$POSEIDON_REF_LOG_EXPECTED" > "$POSEIDON_REF_LOG_DESTINATION") || exit 1
-   created=1
-  fi
+  if [ -e "$POSEIDON_REF_LOG_DESTINATION" ] || [ -L "$POSEIDON_REF_LOG_DESTINATION" ]; then return 1; fi
  fi
+}
+if [ "$1" = prepared ]; then
+ check_reference || exit 1
 fi
 status=0
 if [ -x "$POSEIDON_REF_DELEGATE" ]; then
  "$POSEIDON_REF_DELEGATE" "$@"
  status=$?
 fi
-if [ "$status" != 0 ] && [ "$created" = 1 ]; then
- # Still inside the prepared hook, with Git's reference locks held.
- if /usr/bin/cmp -s "$POSEIDON_REF_LOG_EXPECTED" "$POSEIDON_REF_LOG_DESTINATION"; then
-  /usr/bin/rm -f -- "$POSEIDON_REF_LOG_DESTINATION"
+if [ "$1" = prepared ] && [ "$status" = 0 ]; then
+ # Recheck after the authorized hook, then seed history as the last step, still
+ # under Git's source/destination locks: a deadline or signal while that hook
+ # runs cannot leave a destination reflog without its ref.
+ check_reference || exit 1
+ if [ -n "$POSEIDON_REF_LOG_DESTINATION" ] && [ "$POSEIDON_REF_LOG_EXISTS" = 1 ]; then
+  (set -C; /usr/bin/cat "$POSEIDON_REF_LOG_EXPECTED" > "$POSEIDON_REF_LOG_DESTINATION") || exit 1
  fi
 fi
 exit "$status"
