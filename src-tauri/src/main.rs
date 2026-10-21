@@ -220,6 +220,44 @@ async fn set_branch_hook_trust(
         .await
 }
 
+#[tauri::command]
+async fn list_stashes(
+    service: State<'_, RepositoryService>,
+    session_id: u32,
+    generation: u32,
+) -> Result<poseidon_core::domain::StashListResponse, AppError> {
+    service.stashes(session_id, generation).await
+}
+#[tauri::command]
+async fn get_stash_details(
+    service: State<'_, RepositoryService>,
+    session_id: u32,
+    generation: u32,
+    selection: poseidon_core::domain::StashSelection,
+) -> Result<poseidon_core::domain::StashDetailsResponse, AppError> {
+    service
+        .stash_details(session_id, generation, selection)
+        .await
+}
+#[tauri::command]
+async fn prepare_stash(
+    service: State<'_, RepositoryService>,
+    session_id: u32,
+    generation: u32,
+    action: poseidon_core::domain::StashAction,
+) -> Result<poseidon_core::domain::StashPlanResponse, AppError> {
+    service.prepare_stash(session_id, generation, action).await
+}
+#[tauri::command]
+async fn execute_stash(
+    service: State<'_, RepositoryService>,
+    session_id: u32,
+    generation: u32,
+    token: u32,
+) -> Result<poseidon_core::domain::BranchChangeResponse, AppError> {
+    service.execute_stash(session_id, generation, token).await
+}
+
 #[cfg(feature = "runtime-bench")]
 struct BenchClock {
     start: std::time::Instant,
@@ -270,7 +308,11 @@ fn main() {
         set_commit_hook_trust,
         prepare_branch,
         execute_branch,
-        set_branch_hook_trust
+        set_branch_hook_trust,
+        list_stashes,
+        get_stash_details,
+        prepare_stash,
+        execute_stash
     ]);
     #[cfg(feature = "runtime-bench")]
     let builder = builder.manage(clock)
@@ -279,7 +321,7 @@ fn main() {
                 let _ = webview.eval("requestAnimationFrame(() => requestAnimationFrame(() => window.__TAURI_INTERNALS__.invoke('runtime_probe', {sequence:0,ready:true})))");
             }
         })
-        .invoke_handler(tauri::generate_handler![check_git, open_repository, refresh_repository, get_commit, get_history, get_commit_files, get_file_diff, get_working_changes, get_working_diff, set_repository_trust, stage_file, unstage_file, prepare_commit, create_commit, set_commit_hook_trust, prepare_branch, execute_branch, set_branch_hook_trust, runtime_probe]);
+        .invoke_handler(tauri::generate_handler![check_git, open_repository, refresh_repository, get_commit, get_history, get_commit_files, get_file_diff, get_working_changes, get_working_diff, set_repository_trust, stage_file, unstage_file, prepare_commit, create_commit, set_commit_hook_trust, prepare_branch, execute_branch, set_branch_hook_trust, list_stashes, get_stash_details, prepare_stash, execute_stash, runtime_probe]);
     builder
         .run(tauri::generate_context!())
         .expect("failed to start Git-Poseidon");

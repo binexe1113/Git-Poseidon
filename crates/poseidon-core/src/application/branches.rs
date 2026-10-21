@@ -400,7 +400,7 @@ fn status_paths(status: &[u8]) -> Vec<Vec<u8>> {
     paths
 }
 
-async fn ensure_location(git: &Git, location: &RepositoryLocation) -> Result<()> {
+pub(super) async fn ensure_location(git: &Git, location: &RepositoryLocation) -> Result<()> {
     let actual = git.locate(&location.root).await?;
     if actual.root != location.root
         || actual.git_dir != location.git_dir

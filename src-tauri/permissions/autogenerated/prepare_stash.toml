@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-stash"
+description = "Enables the prepare_stash command without any pre-configured scope."
+commands.allow = ["prepare_stash"]
+
+[[permission]]
+identifier = "deny-prepare-stash"
+description = "Denies the prepare_stash command without any pre-configured scope."
+commands.deny = ["prepare_stash"]

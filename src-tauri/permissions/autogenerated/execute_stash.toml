@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execute-stash"
+description = "Enables the execute_stash command without any pre-configured scope."
+commands.allow = ["execute_stash"]
+
+[[permission]]
+identifier = "deny-execute-stash"
+description = "Denies the execute_stash command without any pre-configured scope."
+commands.deny = ["execute_stash"]

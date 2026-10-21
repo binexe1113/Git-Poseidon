@@ -204,3 +204,31 @@ export function setBranchHookTrust(
 ): Promise<void> {
   return invoke('set_branch_hook_trust', { sessionId, generation, trusted });
 }
+
+export function listStashes(
+  sessionId: number,
+  generation: number,
+): Promise<import('./bindings').StashListResponse> {
+  return invoke('list_stashes', { sessionId, generation });
+}
+export function getStashDetails(
+  sessionId: number,
+  generation: number,
+  selection: import('./bindings').StashSelection,
+): Promise<import('./bindings').StashDetailsResponse> {
+  return invoke('get_stash_details', { sessionId, generation, selection });
+}
+export function prepareStash(
+  sessionId: number,
+  generation: number,
+  action: import('./bindings').StashAction,
+): Promise<import('./bindings').StashPlanResponse> {
+  return invoke('prepare_stash', { sessionId, generation, action });
+}
+export function executeStash(
+  sessionId: number,
+  generation: number,
+  token: number,
+): Promise<import('./bindings').BranchChangeResponse> {
+  return invoke('execute_stash', { sessionId, generation, token });
+}

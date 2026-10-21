@@ -20,6 +20,7 @@ use std::{
 use tokio::sync::Semaphore;
 mod branches;
 mod creation;
+mod stash;
 
 #[derive(Clone)]
 struct Session {
@@ -43,6 +44,8 @@ pub struct RepositoryService {
     commit_plan: Mutex<Option<creation::PreparedCommit>>,
     next_plan: AtomicU32,
     branch_plan: Mutex<Option<branches::PreparedBranch>>,
+    stash_listing: Mutex<Option<stash::Listing>>,
+    stash_queries: Semaphore,
 }
 
 /// Commit diffs read immutable objects, so they do not wait for history queries.
@@ -205,6 +208,8 @@ impl RepositoryService {
             mutation: Semaphore::new(1),
             commit_plan: Mutex::new(None),
             branch_plan: Mutex::new(None),
+            stash_listing: Mutex::new(None),
+            stash_queries: Semaphore::new(1),
             next_plan: AtomicU32::new(1),
             active: Mutex::new(None),
             next_id: AtomicU32::new(1),

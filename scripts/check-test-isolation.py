@@ -45,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix="poseidon-host-config-") as directory:
         subprocess.run(
             ["cargo", "test", "--locked", "-p", "poseidon-core",
              "--test", "fixtures", "--test", "stage", "--test", "stage_race",
-             "--test", "commit_creation", "--test", "commit_race", "--test", "branches"],
+             "--test", "commit_creation", "--test", "commit_race", "--test", "branches",
+             "--test", "stash", "--test", "stash_race"],
             env=env, check=True,
         )
         if marker.exists():
