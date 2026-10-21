@@ -467,7 +467,10 @@ async fn trust_is_explicit_bound_to_identity_and_revocable() {
         .stage_file(id, generation, changes.revision, WorkingArea::Unstaged, 0)
         .await
         .unwrap_err();
-    assert!(matches!(error.code, ErrorCode::WorkingTreeChanged));
+    assert!(
+        matches!(error.code, ErrorCode::WorkingTreeChanged),
+        "{error:?}"
+    );
     assert!(list(&service, id, generation).await.trusted);
     #[cfg(unix)]
     {
@@ -540,6 +543,13 @@ async fn filters_run_only_after_trust_like_git_add() {
         // Deterministic analogue of an additional host-configured driver (e.g. LFS).
         f.git(&["config", "filter.unused.clean", &clean]);
         std::fs::write(f.root.join("asset.bin"), [0u8, 1, 2, 3, 255]).unwrap();
+        // Force both Git and the inert inspection to examine content instead
+        // of accepting a cached stat match. This keeps the no-filter assertion
+        // independent of filesystem timestamp granularity and scheduling.
+        std::fs::File::open(f.root.join("asset.bin"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
     }
     let service = RepositoryService::default();
     let opened = service.open(&app.root).await.unwrap();
@@ -586,13 +596,13 @@ async fn filters_run_only_after_trust_like_git_add() {
     assert_eq!(state(&app), state(&twin));
     let blob = app.git(&["cat-file", "-p", ":asset.bin"]);
     assert!(blob.starts_with("version https://git-lfs.github.com/spec/v1"));
-    // Trusted reads apply the filter too: the staged file is not shown as modified.
-    assert!(
-        change.working.unstaged.is_empty(),
-        "{:?}",
-        change.working.unstaged
-    );
+    // Inspection is now raw even after trust. The pointer/blob oracle above
+    // still proves that writes preserved the authorized filter semantics.
+    assert_eq!(change.working.unstaged.len(), 1);
+    assert_eq!(change.working.unstaged[0].path, "asset.bin");
+    let executions_after_write = std::fs::read(&markers[0]).unwrap();
     assert_listing_current(&service, id, generation, &change).await;
+    assert_eq!(std::fs::read(&markers[0]).unwrap(), executions_after_write);
     service.set_trust(id, generation, false).await.unwrap();
     let executions = std::fs::read(&markers[0]).unwrap();
     let revoked = list(&service, id, generation).await;

@@ -1,5 +1,6 @@
 pub(crate) mod branches;
 pub(crate) mod commit;
+pub(crate) mod execution;
 pub(crate) mod stash;
 use crate::{
     diff,
@@ -167,7 +168,7 @@ impl Git {
             .process
             .run(root, &["rev-parse", "--verify", "--quiet", "HEAD"])
             .await?;
-        let name = parse::text(trim_lf(&branch.stdout))
+        let name = parse::display_path(trim_lf(&branch.stdout))
             .trim_start_matches("refs/heads/")
             .to_owned();
         match (branch.success, target.success) {
@@ -303,7 +304,7 @@ impl Git {
             if f.len() != 7 {
                 return Err(AppError::protocol());
             }
-            let name = parse::text(f[0]);
+            let name = parse::display_path(f[0]);
             let oid = if f[2] == b"commit" {
                 Some(parse::text(f[1]))
             } else if f[4] == b"commit" {
@@ -314,7 +315,11 @@ impl Git {
                     .process
                     .run(
                         &location.root,
-                        &["rev-parse", "--verify", &format!("{name}^{{commit}}")],
+                        &[
+                            "rev-parse",
+                            "--verify",
+                            &format!("{}^{{commit}}", parse::text(f[1])),
+                        ],
                     )
                     .await?;
                 if value.success {
@@ -391,9 +396,8 @@ impl Git {
         let cancel = Cancellation::default();
         let config = self.read_config(location, trusted, &cancel).await?;
         let output = self
-            .process
-            .run_configured(
-                &location.root,
+            .inspect(
+                location,
                 &[
                     "status",
                     "--porcelain=v2",
@@ -497,20 +501,15 @@ impl Git {
         Ok(config)
     }
 
-    /// Configuration for reading the worktree. Untrusted: every configured clean/process
-    /// filter becomes a no-op, because `status`/`diff-files` would otherwise run them and
-    /// inspection must not execute repository-configured programs (docs/09); files are
-    /// compared as raw bytes. Trusted: Git's own configuration, as `git status` sees it.
+    /// Snapshot configuration only; inspection_context neutralizes every driver
+    /// in the exact private snapshot, regardless of repository trust.
     pub(crate) async fn read_config(
         &self,
         location: &RepositoryLocation,
-        trusted: bool,
+        _trusted: bool,
         cancel: &Cancellation,
     ) -> Result<Vec<(OsString, OsString)>> {
-        if trusted {
-            return Ok(Vec::new());
-        }
-        inert_filters(&self.repo_config(location, cancel).await?.drivers)
+        self.execution_config(location, cancel).await
     }
 
     pub(crate) async fn detail(
@@ -781,10 +780,7 @@ impl Git {
             stdout_bytes: DIFF_OUTPUT_BYTES,
             ..Limits::default()
         };
-        let output = self
-            .process
-            .run_configured(&location.root, args, config, limits, cancel)
-            .await?;
+        let output = self.inspect(location, args, config, limits, cancel).await?;
         if !output.success {
             return Err(local_failure());
         }
@@ -799,6 +795,8 @@ impl Git {
         &self,
         location: &RepositoryLocation,
         paths: &[Vec<u8>],
+        config: &[(OsString, OsString)],
+        index: &Path,
     ) -> Result<Duration> {
         let mut input = Vec::new();
         for path in paths {
@@ -812,7 +810,7 @@ impl Git {
             "--pathspec-from-file=-",
             "--pathspec-file-nul",
         ];
-        self.write(location, &args, &input).await
+        self.write(location, &args, &input, config, index).await
     }
 
     /// Replaces index entries with `update-index -z --index-info` records (mode, object,
@@ -822,9 +820,16 @@ impl Git {
         &self,
         location: &RepositoryLocation,
         records: &[u8],
+        index: &Path,
     ) -> Result<Duration> {
-        self.write(location, &["update-index", "-z", "--index-info"], records)
-            .await
+        self.write(
+            location,
+            &["update-index", "-z", "--index-info"],
+            records,
+            &[],
+            index,
+        )
+        .await
     }
 
     async fn write(
@@ -832,21 +837,27 @@ impl Git {
         location: &RepositoryLocation,
         args: &[&str],
         input: &[u8],
+        config: &[(OsString, OsString)],
+        index: &Path,
     ) -> Result<Duration> {
         let limits = Limits {
             timeout: WRITE_TIMEOUT,
             ..Limits::default()
         };
+        let mut context =
+            self.execution_context(location, config, execution::GitExecutionPolicy::IndexWrite)?;
+        context.index(index);
         // Never cancelled by a newer selection: a write runs to its end or its timeout.
         let output = match self
             .process
-            .run_input(
+            .run_input_env(
                 &location.root,
                 args,
-                &[],
+                &context.config,
                 Some(input),
                 limits,
                 &Cancellation::default(),
+                &context.env,
             )
             .await
         {

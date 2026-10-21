@@ -29,8 +29,13 @@ impl RepositoryService {
     ) -> Result<()> {
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
         let location = self.session_location(session_id, generation)?;
+        let policy = if trusted {
+            git::execution::hooks_digest(&Git::discover()?.branch_state(&location).await?.hooks)
+        } else {
+            String::new()
+        };
         self.trust
-            .set_branch_hooks(&trust::identity(&location)?, trusted)?;
+            .set_branch_hooks(&trust::identity(&location)?, trusted, policy)?;
         *self.branch_plan.lock().map_err(|_| busy())? = None;
         Ok(())
     }
@@ -49,6 +54,8 @@ impl RepositoryService {
         }
         let git = Git::discover()?;
         ensure_location(&git, &location).await?;
+        git.ensure_write_format(&location, matches!(action, BranchAction::Switch { .. }))
+            .await?;
         git.branch_name(&location.root, action_name(&action))
             .await?;
         if let BranchAction::Rename { new_name, .. } = &action {
@@ -56,9 +63,14 @@ impl RepositoryService {
         }
         let identity = trust::identity(&location)?;
         let trusted = self.trust.is_trusted(&identity)?;
-        let hooks_trusted = self.trust.branch_hooks_trusted(&identity)?;
+
         let repo = repo_stamp(&location);
         let state = git.branch_state(&location).await?;
+        let hooks_trusted = self.trust.scoped_hooks(
+            &identity,
+            &git::execution::hooks_digest(&state.hooks),
+            true,
+        )?;
         let branches = parse::branches(&state.refs)?;
         let selected = branches.iter().find(|b| {
             b.full_ref == format!("refs/heads/{}", action_name(&action))
@@ -174,6 +186,26 @@ impl RepositoryService {
                 }
             }
         }
+        if block.is_none() {
+            if let BranchAction::Delete { expected_oid, .. } = &action {
+                if let Some(upstream) = selected.and_then(|b| b.upstream.as_ref()) {
+                    let upstream = branches.iter().find(|b| b.full_ref == *upstream);
+                    if let Some(upstream) = upstream {
+                        if !git
+                            .ancestor(&location.root, expected_oid, &upstream.oid)
+                            .await?
+                        {
+                            block=Some("Branch não integrada ao upstream: exclusão segura recusada, mesmo que esteja integrada ao HEAD.".into());
+                        }
+                    } else {
+                        block = Some(
+                            "Upstream ausente ou fora da listagem; revise a exclusão no terminal."
+                                .into(),
+                        );
+                    }
+                }
+            }
+        }
         // Native dry-run checks tracked modifications without touching index/worktree.
         // Filters are neutralised in this preview; execution uses the authorized native policy.
         if block.is_none() && trusted {
@@ -240,6 +272,7 @@ impl RepositoryService {
     ) -> Result<BranchChangeResponse> {
         let start = Instant::now();
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
+        let _trust_lease = self.trust.lease()?;
         let location = self.session_location(session_id, generation)?;
         let plan = self
             .branch_plan
@@ -256,9 +289,24 @@ impl RepositoryService {
             return Err(unsupported(&reason));
         }
         let git = Git::discover()?;
+        if matches!(plan.action, BranchAction::Switch { .. })
+            && !self.trust.filters_allowed(
+                &plan.identity,
+                &git::execution::filters_digest(&git::execution::config_records(
+                    &plan.state.config,
+                )?),
+            )?
+        {
+            return Err(AppError::new(ErrorCode::TrustRequired,"A configuração de filtros mudou. Revogue e conceda confiança novamente para revisar os programas atuais."));
+        }
         if trust::identity(&location)? != plan.identity
             || !self.trust.is_trusted(&plan.identity)?
-            || (!plan.state.hooks.is_empty() && !self.trust.branch_hooks_trusted(&plan.identity)?)
+            || (!plan.state.hooks.is_empty()
+                && !self.trust.scoped_hooks(
+                    &plan.identity,
+                    &git::execution::hooks_digest(&plan.state.hooks),
+                    true,
+                )?)
         {
             return Err(AppError::new(
                 ErrorCode::TrustRequired,
@@ -284,7 +332,7 @@ impl RepositoryService {
         }
         ensure_location(&git, &location).await?;
         let git_start = Instant::now();
-        let result = git.branch_write(&location, &plan.action).await;
+        let result = git.branch_write(&location, &plan.action, &plan.state).await;
         let git_ms = elapsed_ms(git_start);
         let after = git.branch_state(&location).await;
         let acknowledged = result.as_ref().is_ok_and(|o| o.success);

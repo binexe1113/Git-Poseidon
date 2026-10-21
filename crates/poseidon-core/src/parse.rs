@@ -83,7 +83,7 @@ pub(crate) fn branches(bytes: &[u8]) -> Result<Vec<Branch>> {
             if f.len() != 6 {
                 return Err(AppError::protocol());
             }
-            let full_ref = text(f[0]);
+            let full_ref = display_path(f[0]);
             let oid = text(f[1]);
             if !valid_oid(&oid) {
                 return Err(AppError::protocol());
@@ -103,8 +103,8 @@ pub(crate) fn branches(bytes: &[u8]) -> Result<Vec<Branch>> {
                 oid,
                 remote,
                 current: f[3] == b"*",
-                upstream: (!f[2].is_empty()).then(|| text(f[2])),
-                symbolic_target: (!f[4].is_empty()).then(|| text(f[4])),
+                upstream: (!f[2].is_empty()).then(|| display_path(f[2])),
+                symbolic_target: (!f[4].is_empty()).then(|| display_path(f[4])),
             })
         })
         .collect()

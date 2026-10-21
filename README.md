@@ -19,6 +19,10 @@ A versão em desenvolvimento é **0.2.0-alpha**. Não há merge, rebase ou opera
 
 Stash está disponível **somente para leitura** nesta versão. Criar, aplicar (inclusive `--index`) e excluir estão desabilitados na interface e recusados pelo backend antes de iniciar qualquer comando Git. A exclusão nativa por posição não garante a identidade da entrada sob concorrência externa, e a inspeção prévia de configuração não impede hooks/filtros/drivers introduzidos na última janela. As escritas só poderão voltar com garantias demonstradas para esses casos; nenhuma política parcial de desativação de hooks é apresentada como isolamento completo. A listagem pode mudar por ações externas; seleções obsoletas exigem nova inspeção.
 
+A inspeção de alterações locais não executa filtros externos, mesmo após confiar no repositório. Por isso, arquivos transformados por filtros podem aparecer modificados depois do preparo. As escritas usam configuração capturada pelo backend; novas definições de filtros exigem renovar a confiança, e mudanças no conteúdo dos hooks exigem nova autorização separada.
+
+As escritas protegidas foram validadas no Linux, com refs no formato `files` e index sem split index; repositórios compartilhados entre usuários não são suportados. As escritas são recusadas nos demais sistemas até a implementação dos guards equivalentes. O contexto protegido de inspeção também requer Unix nesta implementação; esses fluxos ainda não estão disponíveis no Windows. Git LFS é recusado nos caminhos que o exigem, sem armazenar conteúdo bruto como substituto. Filtros e hooks que dependem da localização original da pasta Git ou do script devem ser usados no terminal: os programas autorizados executam em contexto Git temporário, sem sandbox nem isolamento de suas dependências e efeitos. A concorrência externa ainda pode causar falhas parciais; não há retry nem rollback automático.
+
 ## Desenvolvimento
 
 Requer Git 2.49+, Rust 1.90+, Node.js 22.12+ e as [dependências de sistema do Tauri](https://v2.tauri.app/start/prerequisites/).

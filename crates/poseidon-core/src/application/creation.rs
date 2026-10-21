@@ -26,8 +26,15 @@ impl RepositoryService {
     ) -> Result<()> {
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
         let location = self.session_location(session_id, generation)?;
+        let policy = if trusted {
+            git::execution::hooks_digest(
+                &Git::discover()?.commit_policy(&location).await?.hook_bytes,
+            )
+        } else {
+            String::new()
+        };
         self.trust
-            .set_hooks(&trust::identity(&location)?, trusted)?;
+            .set_hooks(&trust::identity(&location)?, trusted, policy)?;
         *self.commit_plan.lock().map_err(|_| busy())? = None;
         Ok(())
     }
@@ -58,10 +65,16 @@ impl RepositoryService {
             return Err(changed());
         }
         let git = Git::discover()?;
+        super::branches::ensure_location(&git, &location).await?;
+        git.ensure_write_format(&location, true).await?;
         let policy = git.commit_policy(&location).await?;
         let index = git.index_records(&location).await?;
         let identity = trust::identity(&location)?;
-        let hooks_trusted = self.trust.hooks_trusted(&identity)?;
+        let hooks_trusted = self.trust.scoped_hooks(
+            &identity,
+            &git::execution::hooks_digest(&policy.hook_bytes),
+            false,
+        )?;
         let config = git.repo_config(&location, &Cancellation::default()).await?;
         let mut block = git::operation_blocker(&location.git_dir);
         if block.is_none()
@@ -155,6 +168,7 @@ impl RepositoryService {
         validate_message(message)?;
         let start = Instant::now();
         let _permit = self.mutation.try_acquire().map_err(|_| writing())?;
+        let _trust_lease = self.trust.lease()?;
         let location = self.session_location(session_id, generation)?;
         let plan = self
             .commit_plan
@@ -177,7 +191,11 @@ impl RepositoryService {
                 "A confiança do repositório foi revogada.",
             ));
         }
-        let hooks_allowed = self.trust.hooks_trusted(&identity)?;
+        let hooks_allowed = self.trust.scoped_hooks(
+            &identity,
+            &git::execution::hooks_digest(&plan.policy.hook_bytes),
+            false,
+        )?;
         if !plan.policy.hooks.is_empty() && !hooks_allowed {
             return Err(AppError::new(
                 ErrorCode::TrustRequired,
@@ -185,6 +203,8 @@ impl RepositoryService {
             ));
         }
         let git = Git::discover()?;
+        super::branches::ensure_location(&git, &location).await?;
+        git.ensure_write_format(&location, true).await?;
         if let Some(block) = git::operation_blocker(&location.git_dir) {
             return Err(unsupported(&block));
         }
@@ -214,6 +234,7 @@ impl RepositoryService {
                 message,
                 hooks_allowed,
                 plan.head.as_deref(),
+                plan.repo.head.as_deref(),
                 &action,
             )
             .await;
@@ -264,7 +285,7 @@ impl RepositoryService {
         let refresh_start = Instant::now();
         let snapshot = self.rebuild_snapshot(session_id).await.ok();
         let message = match outcome {
-            CommitOutcome::Created if warning => "Commit criado e HEAD verificado, mas houve falha em hook ou na finalização. Confira os efeitos dos hooks; não repita o commit.",
+            CommitOutcome::Created if warning => "Commit criado e HEAD verificado, mas houve falha ou alteração de metadados em hook/finalização. Outras refs e configurações do contexto temporário não são publicadas. Confira os efeitos dos hooks; não repita o commit.",
             CommitOutcome::Created => "Commit criado. HEAD, histórico e index atualizados.",
             CommitOutcome::Rejected => "Commit não criado. O Git/hook recusou a operação ou um hook alterou o index. Confira as alterações antes de revisar novamente; o rascunho foi preservado.",
             CommitOutcome::Unknown => "Resultado desconhecido: confira o HEAD e o index antes de qualquer nova tentativa. Não houve retry nem rollback; rascunho preservado.",

@@ -89,6 +89,9 @@ impl GitProcess {
         let paths = std::env::var_os("PATH").unwrap_or_default();
         let binary = if cfg!(windows) { "git.exe" } else { "git" };
         for dir in std::env::split_paths(&paths) {
+            if !dir.is_absolute() {
+                continue;
+            }
             let path = dir.join(binary);
             if path.is_file() {
                 if let Ok(executable) = path.canonicalize() {
@@ -182,7 +185,32 @@ impl GitProcess {
                 command.env_remove(name);
             }
         }
+        for name in [
+            "ENV",
+            "BASH_ENV",
+            "CDPATH",
+            "GCONV_PATH",
+            "LOCPATH",
+            "NLSPATH",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+        ] {
+            command.env_remove(name);
+        }
+        let path = std::env::join_paths(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .filter(|p| p.is_absolute()),
+        )
+        .unwrap_or_default();
         command
+            .env("PATH", path)
+            .env_remove("ENV")
+            .env_remove("BASH_ENV")
+            .env_remove("CDPATH")
             .current_dir(cwd)
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -369,7 +397,7 @@ async fn read_limited(mut pipe: impl AsyncRead + Unpin, limit: usize) -> Result<
     if bytes.len() > limit {
         return Err(AppError::new(
             ErrorCode::OutputLimit,
-            "A consulta excedeu o limite de dados desta fase. O repositório não foi alterado.",
+            "A resposta do Git excedeu o limite de dados. Confira o estado antes de repetir uma escrita.",
         ));
     }
     Ok(bytes)

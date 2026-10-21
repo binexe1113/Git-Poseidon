@@ -272,9 +272,15 @@
         </p>
         <p>
           Diretório efetivo: <code>{plan?.hooksPath}</code>. Hooks ativos:
-          <code>{plan?.hooks.join(', ')}</code>. A configuração pode mudar
-          depois. Esta autorização não cria um sandbox. Você pode revogá-la aqui
-          ou revogar toda a confiança do repositório.
+          <code>{plan?.hooks.join(', ')}</code>. A autorização vincula-se ao
+          conteúdo dos hooks atuais; alterações exigem nova autorização. Você
+          pode revogá-la aqui ou revogar toda a confiança do repositório.
+        </p>
+        <p>
+          A execução usa cópias dos hooks em um contexto Git temporário. Hooks
+          que dependem da localização original do script ou da pasta Git devem
+          ser usados no terminal. Não há sandbox: dependências e efeitos dos
+          programas autorizados não são isolados.
         </p>
         <p>
           Se um hook alterar o index antes do commit, a operação será recusada

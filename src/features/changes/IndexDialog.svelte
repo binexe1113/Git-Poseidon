@@ -49,8 +49,8 @@
       {#if drivers.length}<p>
           Filtros configurados agora: <code>{drivers.join(', ')}</code>.
         </p>{:else}<p>
-          Nenhum filtro está configurado agora, mas a configuração e os arquivos
-          <code>.gitattributes</code> podem passar a ativar algum depois.
+          Nenhum filtro está configurado agora. Novas definições não serão
+          autorizadas automaticamente.
         </p>{/if}
       <p>
         Confiar <strong>não é um sandbox</strong>: o Poseidon não isola esses
@@ -58,8 +58,14 @@
         <code>.git</code> atual), fica gravada neste computador e pode ser revogada
         no painel Alterações locais. Worktrees com o mesmo diretório Git comum compartilham
         essa confiança. Após confiar, confira a lista atualizada e acione o arquivo
-        novamente. Sem confiança, a inspeção continua disponível e nenhum filtro é
-        executado.
+        novamente. Alterações nas definições dos filtros exigem revogar e conceder
+        confiança novamente. A inspeção permanece sem filtros externos, inclusive
+        após confiar.
+      </p>
+      <p>
+        Git LFS e filtros que dependem da pasta Git original devem ser usados no
+        terminal nesta versão. Programas autorizados continuam tendo acesso aos
+        seus arquivos e à rede; suas dependências não são isoladas.
       </p>
     </div>
     <div class="index-dialog-actions">

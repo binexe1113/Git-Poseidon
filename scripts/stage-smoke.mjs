@@ -210,10 +210,17 @@ try {
   await waitFor(
     `!!window.__item('unstaged','alpha.txt') && window.__last !== null`,
   );
-  const act = (area, path) =>
-    ev(
+  const idle = () =>
+    waitFor(
+      `document.querySelector('.commit-composer')?.getAttribute('aria-busy') !== 'true' && !document.querySelector('.changes-panel')?.getAttribute('aria-busy')?.includes('true')`,
+    );
+  await idle();
+  const act = async (area, path) => {
+    await idle();
+    return ev(
       `window.__item(${JSON.stringify(area)},${JSON.stringify(path)}).closest('.file-row').querySelector('.row-action').click(); true`,
     );
+  };
   const open = async (area, path) => {
     await ev(
       `window.__item(${JSON.stringify(area)},${JSON.stringify(path)}).click(); true`,
@@ -226,7 +233,7 @@ try {
     ev(`document.querySelector('.index-message')?.textContent.trim()`);
   const done = () =>
     waitFor(
-      `!!document.querySelector('.index-message') && !document.querySelector('.changes-panel')?.getAttribute('aria-busy')?.includes('true') && !document.querySelector('.file-row.busy')`,
+      `!!document.querySelector('.index-message') && !document.querySelector('.changes-panel')?.getAttribute('aria-busy')?.includes('true') && !document.querySelector('.file-row.busy') && document.querySelector('.commit-composer')?.getAttribute('aria-busy') !== 'true'`,
     );
   const cancel = () =>
     ev(`document.querySelector('.index-dialog .toolbar-button').click(); true`);
@@ -319,7 +326,7 @@ try {
   const lockedIndex = indexBytes();
   await act('unstaged', 'alpha.txt');
   await done();
-  assert.ok((await msg()).includes('index.lock'));
+  assert.ok((await msg()).includes('index.lock'), await msg());
   assert.equal(
     readFileSync(join(repo, '.git/index.lock'), 'utf8'),
     'external lock',
@@ -329,14 +336,39 @@ try {
   rmSync(join(repo, '.git/index.lock'));
   report.checks.lock_preserved_no_retry = true;
 
-  // Real Git failure: clean filter introduced after listing, on an untracked file.
-  git('config', 'filter.reject.clean', 'false');
+  // A new definition must be refused even with a fresh listing. Only an
+  // explicit new grant may run the failing filter; preserve the failure oracle.
+  git('config', 'filter.reject.clean', ': > FILTER_REJECT_RAN; exit 1');
   git('config', 'filter.reject.required', 'true');
   const failedIndex = indexBytes();
+  await idle();
+  const newDefinition = await evAsync(
+    `window.__ipc('get_working_changes',window.__ctx).then(r=>window.__ipc('stage_file',{...window.__ctx,revision:r.data.revision,area:'untracked',index:r.data.untracked.find(f=>f.path==='blocked.fail').index})).then(()=>null,e=>e.code)`,
+  );
+  assert.equal(newDefinition, 'TrustRequired');
+  assert.equal(indexBytes(), failedIndex);
+  assert.ok(!readdirSync(repo).includes('FILTER_REJECT_RAN'));
+  report.checks.new_filter_definition_requires_new_grant = true;
+  await ev(`document.querySelector('.trust-bar .text-button').click(); true`);
+  await waitFor(
+    `document.querySelector('.trust-bar') && !document.querySelector('.trust-bar.trusted') && !document.querySelector('.row-action:disabled')`,
+  );
+  await act('untracked', 'blocked.fail');
+  await waitFor('!!document.querySelector(".index-dialog[open]")');
+  await confirm();
+  await waitFor(
+    `document.querySelector('.trust-bar.trusted') && !document.querySelector('.row-action:disabled')`,
+  );
+  assert.equal(
+    indexBytes(),
+    failedIndex,
+    'grant must not replay the refused write',
+  );
   await act('untracked', 'blocked.fail');
   await done();
   assert.ok((await msg()).includes('recusou'));
   assert.equal(indexBytes(), failedIndex);
+  assert.ok(readdirSync(repo).includes('FILTER_REJECT_RAN'));
   await shot('07-filter-failure');
   report.checks.filter_failure_reconciled = true;
 
@@ -373,6 +405,7 @@ try {
   await waitFor(
     `document.querySelector('.trust-bar') && !document.querySelector('.trust-bar.trusted') && !document.querySelector('.row-action:disabled')`,
   );
+  await idle();
   const revoked = await evAsync(
     `window.__ipc('unstage_file', {...window.__ctx, revision:window.__last.revision,index:0}).then(()=>null,e=>e.code)`,
   );
