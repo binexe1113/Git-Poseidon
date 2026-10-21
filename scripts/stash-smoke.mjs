@@ -263,7 +263,12 @@ try {
   assert.equal(git('rev-parse', 'stash'), stored);
   checks.inspection_preserves_index_worktree_and_stash = true;
   // External native writers remain observable; no application mutation is used.
-  git('stash', 'store', '-m', 'externo', stored);
+  write('common.txt', 'external writer\n');
+  git('stash', 'push', '-m', 'externo');
+  const externalStored = git('rev-parse', 'stash');
+  const externalIndex = readFileSync(join(repo, '.git/index'));
+  assert.notEqual(externalStored, stored);
+  assert.equal(git('stash', 'list').split('\n').length, 2);
   await wait(`document.querySelectorAll('.stash-entry').length===2`);
   checks.external_refresh = true;
   for (const [w, h] of [
@@ -316,9 +321,9 @@ try {
     `document.querySelector('.stash-section .count')?.textContent==='2'`,
   );
   const after = memory();
-  assert.deepEqual(readFileSync(join(repo, '.git/index')), baselineIndex);
+  assert.deepEqual(readFileSync(join(repo, '.git/index')), externalIndex);
   assert.equal(readFileSync(join(repo, 'common.txt'), 'utf8'), 'base\n');
-  assert.equal(git('rev-parse', 'stash'), stored);
+  assert.equal(git('rev-parse', 'stash'), externalStored);
   assert.equal(git('stash', 'list').split('\n').length, 2);
   checks.final_state_preserved = true;
   checks.pass = true;
