@@ -988,8 +988,6 @@
             !!indexBusy ||
             !!branchIntent ||
             !!indexDialog}
-          onbusy={(busy) => (branchBusy = busy)}
-          onchanged={branchChanged}
         />
       {/key}
     {/if}

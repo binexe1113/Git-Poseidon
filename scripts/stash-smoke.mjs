@@ -66,6 +66,14 @@ const imported = spawnSync('git', ['fast-import', '--quiet'], {
 assert.equal(imported.status, 0, imported.stderr);
 const main = git('rev-parse', 'HEAD');
 git('branch', '--set-upstream-to=main', 'feature');
+// Native fixture setup only; the application must never perform these writes.
+write('common.txt', 'staged\n');
+git('add', 'common.txt');
+write('common.txt', 'working 日本\n');
+write('untracked.txt', 'new\n');
+git('stash', 'push', '-u', '-m', 'T21 leitura');
+const stored = git('rev-parse', 'stash');
+const baselineIndex = readFileSync(join(repo, '.git/index'));
 const app = spawn(resolve(binary), [], {
   env: { ...env, WEBKIT_INSPECTOR_HTTP_SERVER: '127.0.0.1:9242' },
   stdio: 'ignore',
@@ -172,59 +180,42 @@ try {
 
   const before = memory();
   const scope = `document.querySelector('.stash-dialog')`;
-  async function reviewStash() {
-    await click('Revisar operação', scope);
-    await wait(`!!document.querySelector('.stash-dialog ul')`);
-    await pause(100);
-  }
-  async function confirmStash(label) {
-    const t = Date.now();
-    await click(label, scope);
-    await wait(`!!document.querySelector('.stash-result')`);
-    timings[label] = Date.now() - t;
-    assert.ok(
-      (
-        await ev(`document.querySelector('.stash-result').textContent`)
-      ).includes('concluída'),
-    );
-  }
-  write('common.txt', 'staged\n');
-  git('add', 'common.txt');
-  write('common.txt', 'working 日本\n');
-  write('untracked.txt', 'new\n');
-  await ev(`document.querySelector('[aria-label="Criar stash"]').click();true`);
-  await fill('#stash-message', 'T21 demonstração');
-  await ev(
-    `document.querySelector('.stash-dialog input[type="checkbox"]').click();true`,
-  );
-  await reviewStash();
-  await click('Confiar neste repositório', scope);
-  await wait(
-    `!![...document.querySelectorAll('.stash-dialog button')].find(b=>b.textContent.trim()==='Confirmar criação')`,
-  );
-  await shot('01-create-confirmation');
-  await confirmStash('Confirmar criação');
-  assert.equal(readFileSync(join(repo, 'common.txt'), 'utf8'), 'base\n');
-  assert.equal(git('show', 'stash:common.txt'), 'working 日本');
-  assert.equal(git('show', 'stash^2:common.txt'), 'staged');
-  assert.equal(git('show', 'stash^3:untracked.txt'), 'new');
-  checks.create = true;
-  await close();
   await wait(`document.querySelectorAll('.stash-entry').length===1`);
+  assert.ok(
+    await ev(`document.querySelector('[aria-label="Criar stash"]').disabled`),
+  );
+  assert.ok(
+    await ev(
+      `document.querySelector('.stash-policy').textContent.includes('Somente leitura')`,
+    ),
+  );
+  await shot('01-read-only-policy');
   const t = Date.now();
   await ev(`document.querySelector('.stash-entry').click();true`);
   await wait(`document.querySelectorAll('.layer-tabs button').length===3`);
   timings.details = Date.now() - t;
+  assert.ok(
+    await ev(
+      `[...document.querySelectorAll('.stash-dialog button')].filter(b=>['Aplicar stash','Excluir stash'].includes(b.textContent.trim())).every(b=>b.disabled)`,
+    ),
+  );
+  assert.equal(
+    await ev(
+      `[...document.querySelectorAll('.stash-dialog button')].filter(b=>['Aplicar stash','Excluir stash'].includes(b.textContent.trim())).length`,
+    ),
+    2,
+  );
   await shot('02-details');
   await ev(`document.querySelector('.stash-dialog .file-item').click();true`);
   await wait(
     `document.querySelector('.stash-diff .diff-line')!==null || document.querySelector('.stash-diff .diff-row')!==null`,
   );
-  await shot('03-diff');
-  await ev(
-    `document.querySelector('.stash-diff [aria-label="Fechar diff"]')?.click();true`,
+  assert.ok(
+    await ev(
+      `document.querySelector('.stash-diff').textContent.includes('working 日本')`,
+    ),
   );
-  // Dispatch the viewer's Escape handler through its own root.
+  await shot('03-diff');
   await ev(
     `document.querySelector('.stash-diff .diff-viewer')?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));true`,
   );
@@ -232,43 +223,46 @@ try {
   for (const label of ['Index · base → staged', 'Untracked']) {
     await click(label, scope);
     await wait(`!!document.querySelector('.stash-dialog .file-item')`);
+    await ev(`document.querySelector('.stash-dialog .file-item').click();true`);
+    await wait(`!!document.querySelector('.stash-diff')`);
+    assert.ok(
+      await ev(
+        `document.querySelector('.stash-diff').textContent.includes(${JSON.stringify(label === 'Untracked' ? 'new' : 'staged')})`,
+      ),
+    );
+    await ev(
+      `document.querySelector('.stash-diff .diff-viewer')?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));true`,
+    );
+    await wait(`!document.querySelector('.stash-diff')`);
   }
   checks.layers_and_diff = true;
-  await click('Aplicar stash', scope);
-  await ev(
-    `document.querySelector('.stash-dialog input[type="checkbox"]').click();true`,
-  );
-  await reviewStash();
-  await shot('04-apply-confirmation');
-  await confirmStash('Confirmar aplicação');
-  assert.equal(
-    readFileSync(join(repo, 'common.txt'), 'utf8'),
-    'working 日本\n',
-  );
-  assert.equal(git('show', ':common.txt'), 'staged');
-  assert.equal(readFileSync(join(repo, 'untracked.txt'), 'utf8'), 'new\n');
-  assert.equal(git('stash', 'list').split('\n').length, 1);
-  checks.apply_retains_stash_and_restores_index = true;
+  checks.all_mutation_controls_disabled = true;
   await close();
   await ev(
     `document.querySelector('.stash-entry').dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}));true`,
   );
   await wait(`!!document.querySelector('.branch-menu[open]')`);
-  assert.ok(
-    await ev(`document.activeElement.getAttribute('role')==='menuitem'`),
+  assert.equal(
+    await ev(
+      `document.querySelectorAll('.branch-menu [role="menuitem"]').length`,
+    ),
+    1,
   );
-  await shot('05-keyboard-context');
-  await click('Excluir stash', `document.querySelector('.branch-menu')`);
-  await reviewStash();
-  await shot('06-drop-confirmation');
-  await confirmStash('Confirmar exclusão');
+  assert.ok(
+    await ev(`document.activeElement.textContent.trim()==='Visualizar stash'`),
+  );
+  await shot('04-keyboard-context');
+  await click('Visualizar stash', `document.querySelector('.branch-menu')`);
+  await wait(`!!document.querySelector('.layer-tabs')`);
   await close();
-  await wait(`document.querySelectorAll('.stash-entry').length===0`);
-  assert.equal(git('stash', 'list'), '');
-  checks.drop = true;
-  // External writers are observed without refreshing the entire repository.
-  git('stash', 'push', '-u', '-m', 'externo');
-  await wait(`document.querySelectorAll('.stash-entry').length===1`);
+  checks.keyboard_context_read_only = true;
+  assert.deepEqual(readFileSync(join(repo, '.git/index')), baselineIndex);
+  assert.equal(readFileSync(join(repo, 'common.txt'), 'utf8'), 'base\n');
+  assert.equal(git('rev-parse', 'stash'), stored);
+  checks.inspection_preserves_index_worktree_and_stash = true;
+  // External native writers remain observable; no application mutation is used.
+  git('stash', 'store', '-m', 'externo', stored);
+  await wait(`document.querySelectorAll('.stash-entry').length===2`);
   checks.external_refresh = true;
   for (const [w, h] of [
     [1280, 720],
@@ -279,15 +273,13 @@ try {
   ]) {
     await resize(w, h);
     assert.ok(await ev(`document.documentElement.scrollWidth<=innerWidth`));
-    await shot(`07-layout-${w}x${h}`);
+    await shot(`05-layout-${w}x${h}`);
   }
-  // Large list remains bounded on initial render, with explicit incremental loading.
-  const stored = git('rev-parse', 'stash');
   const reflogPath = join(repo, '.git/logs/refs/stash');
   const originalLog = readFileSync(reflogPath, 'utf8');
   const lastLine = originalLog.trimEnd().split('\n').at(-1);
   const duplicate = stored + lastLine.slice(lastLine.indexOf(' ')) + '\n';
-  writeFileSync(reflogPath, originalLog + duplicate.repeat(160));
+  writeFileSync(reflogPath, originalLog + duplicate.repeat(159));
   await wait(
     `document.querySelector('.stash-section .count')?.textContent==='161'`,
   );
@@ -302,63 +294,31 @@ try {
   );
   checks.large_list_incremental = true;
   await resize(1440, 900);
-  await pause(3000);
   const afterLarge = memory();
   await ev(`document.querySelector('.stash-entry').click();true`);
   await wait(`!!document.querySelector('.layer-tabs')`);
-  await click('Excluir stash', scope);
-  await reviewStash();
   writeFileSync(reflogPath, readFileSync(reflogPath, 'utf8') + duplicate);
   await wait(
     `document.querySelector('.stash-dialog [role="alert"]')?.textContent.includes('lista mudou')`,
   );
   assert.ok(
     await ev(
-      `![...document.querySelectorAll('.stash-dialog button')].some(b=>b.textContent.trim()==='Confirmar exclusão')`,
+      `[...document.querySelectorAll('.stash-dialog button')].filter(b=>['Aplicar stash','Excluir stash'].includes(b.textContent.trim())).every(b=>b.disabled)`,
     ),
   );
-  assert.equal(git('stash', 'list').split('\n').length, 162);
-  await shot('08-stale-confirmation');
-  await click('Cancelar', scope);
-  checks.stale_confirmation_invalidated = true;
-  for (let i = 0; i < 162; i++) git('stash', 'drop', 'stash@{0}');
-  await wait(`document.querySelectorAll('.stash-entry').length===0`);
-  await ev(
-    `document.querySelector('[aria-label="Atualizar repositório"]').click();true`,
-  );
-  await wait(`document.querySelector('.stat-button b')?.textContent==='0'`);
-  await pause(3000);
-  const after = memory();
-  write('common.txt', 'stash conflict\n');
-  git('stash', 'push', '-m', 'conflito-stash');
-  const conflictOid = git('rev-parse', 'stash');
-  write('common.txt', 'new base\n');
-  git('add', 'common.txt');
-  git('commit', '-qm', 'base changed');
-  await ev(
-    `document.querySelector('[aria-label="Atualizar repositório"]').click();true`,
-  );
-  await wait(
-    `document.querySelector('.commit-row')?.textContent.includes('base changed')`,
-  );
-  await wait(`document.querySelectorAll('.stash-entry').length===1`);
-  await ev(`document.querySelector('.stash-entry').click();true`);
-  await wait(`!!document.querySelector('.layer-tabs')`);
-  await click('Aplicar stash', scope);
-  await reviewStash();
-  await click('Confirmar aplicação', scope);
-  await wait(
-    `document.querySelector('.stash-result')?.textContent.includes('incerto')`,
-  );
-  await wait(
-    `document.querySelector('.stash-observed')?.textContent.includes('1 conflitos')`,
-  );
-  assert.notEqual(git('ls-files', '-u'), '');
-  assert.equal(git('rev-parse', 'stash'), conflictOid);
-  assert.ok(readFileSync(join(repo, 'common.txt'), 'utf8').includes('<<<<<<<'));
-  await shot('09-conflict-observed');
+  await shot('06-stale-inspection');
   await close();
-  checks.conflicts_real_state_preserves_stash = true;
+  checks.stale_selection_reported = true;
+  writeFileSync(reflogPath, originalLog);
+  await wait(
+    `document.querySelector('.stash-section .count')?.textContent==='2'`,
+  );
+  const after = memory();
+  assert.deepEqual(readFileSync(join(repo, '.git/index')), baselineIndex);
+  assert.equal(readFileSync(join(repo, 'common.txt'), 'utf8'), 'base\n');
+  assert.equal(git('rev-parse', 'stash'), stored);
+  assert.equal(git('stash', 'list').split('\n').length, 2);
+  checks.final_state_preserved = true;
   checks.pass = true;
   writeFileSync(
     join(output, 'stash-smoke.json'),
@@ -370,7 +330,7 @@ try {
         memoryWindow: { width: 1440, height: 900 },
         fixture: root,
         method:
-          'Real Tauri/WebKit, real IPC/Git; native path dialog, WebKit inspector input and screenshots; process-only NVIDIA workaround. RSS/PSS: twenty samples per state.',
+          'Read-only Stash: real Tauri/WebKit/IPC/Git. Native fixture setup/external writers; no mocked IPC. All mutation controls disabled; immutable inspection verified against physical index/worktree/ref. WebKit inspector input/screenshots; process-only NVIDIA workaround. RSS/PSS: twenty samples per state, no before/after performance claim.',
       },
       null,
       2,

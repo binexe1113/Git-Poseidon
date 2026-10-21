@@ -1,4 +1,4 @@
-//! Stash adapter. Writes use native Git semantics and pinned repository paths.
+//! Read-only stash adapter. Native mutations are intentionally unavailable.
 use super::*;
 impl Git {
     pub(crate) async fn stash_log(&self, l: &RepositoryLocation) -> Result<Vec<u8>> {
@@ -90,57 +90,5 @@ impl Git {
             }
         }
         Ok(values)
-    }
-    pub(crate) async fn stash_write(
-        &self,
-        l: &RepositoryLocation,
-        action: &StashAction,
-    ) -> Result<crate::process::Output> {
-        let reference;
-        let mut args = vec!["stash"];
-        match action {
-            StashAction::Create {
-                message,
-                include_untracked,
-            } => {
-                args.push("push");
-                if *include_untracked {
-                    args.push("--include-untracked");
-                }
-                args.extend(["--message", message.as_str()]);
-            }
-            StashAction::Apply {
-                selection,
-                restore_index,
-            } => {
-                args.push("apply");
-                if *restore_index {
-                    args.push("--index");
-                }
-                args.push(&selection.oid);
-            }
-            StashAction::Drop { selection } => {
-                reference = format!("stash@{{{}}}", selection.index);
-                args.extend(["drop", &reference]);
-            }
-        }
-        let mut pinned: Vec<OsString> = vec![
-            "--git-dir".into(),
-            l.git_dir.as_os_str().to_owned(),
-            "--work-tree".into(),
-            l.root.as_os_str().to_owned(),
-        ];
-        pinned.extend(args.iter().map(OsString::from));
-        self.process
-            .run_with(
-                &l.root,
-                &pinned,
-                Limits {
-                    timeout: Duration::from_secs(120),
-                    ..Limits::default()
-                },
-                &Cancellation::default(),
-            )
-            .await
     }
 }

@@ -24,38 +24,14 @@ async fn main() {
             f.write(&format!("file-{i}"), "base\n");
         }
         f.commit("base");
+        for i in 0..count {
+            f.write(&format!("file-{i}"), "dirty\n");
+        }
+        f.git(&["stash", "push", "-m", "benchmark fixture"]);
         let s = RepositoryService::default();
-        let mut r = s.open(&f.root).await.unwrap();
-        s.set_trust(r.session_id, r.generation, true).await.unwrap();
+        let r = s.open(&f.root).await.unwrap();
         let before = memory();
         for round in 0..10 {
-            for i in 0..count {
-                f.write(&format!("file-{i}"), "dirty\n");
-            }
-            // 500 is the explicit safety-preview limit, tested as a refusal for larger cases.
-            let a = StashAction::Create {
-                message: format!("bench {round}"),
-                include_untracked: false,
-            };
-            let t = Instant::now();
-            let p = s
-                .prepare_stash(r.session_id, r.generation, a)
-                .await
-                .unwrap()
-                .data;
-            let prepare_ms = t.elapsed().as_secs_f64() * 1000.;
-            if let Some(block) = p.block {
-                samples.push(serde_json::json!({"files":count,"round":round,"operation":"blocked_preview","prepare_ms":prepare_ms,"reason":block}));
-                break;
-            }
-            let c = s
-                .execute_stash(r.session_id, r.generation, p.token)
-                .await
-                .unwrap()
-                .data;
-            assert_eq!(c.outcome, BranchOutcome::Applied);
-            r = c.snapshot.unwrap();
-            samples.push(serde_json::json!({"files":count,"round":round,"operation":"create","prepare_ms":prepare_ms,"git_ms":c.git_ms,"execute_ms":c.elapsed_ms}));
             let t = Instant::now();
             let list = s.stashes(r.session_id, r.generation).await.unwrap();
             let list_ms = t.elapsed().as_secs_f64() * 1000.;
@@ -66,47 +42,24 @@ async fn main() {
                 .unwrap();
             let details_ms = t.elapsed().as_secs_f64() * 1000.;
             samples.push(serde_json::json!({"files":count,"round":round,"operation":"read","list_ms":list_ms,"details_ms":details_ms}));
-            for (name, a) in [
-                (
-                    "apply",
-                    StashAction::Apply {
-                        selection: selection.clone(),
-                        restore_index: false,
-                    },
-                ),
-                ("drop", StashAction::Drop { selection }),
+            for action in [
+                StashAction::Create {
+                    message: "unavailable".into(),
+                    include_untracked: true,
+                },
+                StashAction::Apply {
+                    selection: selection.clone(),
+                    restore_index: true,
+                },
+                StashAction::Drop { selection },
             ] {
-                let selection = s
-                    .stashes(r.session_id, r.generation)
-                    .await
-                    .unwrap()
-                    .data
-                    .entries[0]
-                    .selection
-                    .clone();
-                let a = match a {
-                    StashAction::Apply { restore_index, .. } => StashAction::Apply {
-                        selection,
-                        restore_index,
-                    },
-                    _ => StashAction::Drop { selection },
-                };
                 let t = Instant::now();
-                let p = s
-                    .prepare_stash(r.session_id, r.generation, a)
+                let err = s
+                    .prepare_stash(r.session_id, r.generation, action)
                     .await
-                    .unwrap()
-                    .data;
-                let prepare_ms = t.elapsed().as_secs_f64() * 1000.;
-                assert!(p.block.is_none());
-                let c = s
-                    .execute_stash(r.session_id, r.generation, p.token)
-                    .await
-                    .unwrap()
-                    .data;
-                assert_eq!(c.outcome, BranchOutcome::Applied);
-                r = c.snapshot.unwrap();
-                samples.push(serde_json::json!({"files":count,"round":round,"operation":name,"prepare_ms":prepare_ms,"git_ms":c.git_ms,"execute_ms":c.elapsed_ms}));
+                    .unwrap_err();
+                assert!(matches!(err.code, ErrorCode::UnsupportedState));
+                samples.push(serde_json::json!({"files":count,"round":round,"operation":"refused_without_git","elapsed_ms":t.elapsed().as_secs_f64()*1000.}));
             }
         }
         samples.push(serde_json::json!({"files":count,"operation":"memory","before":before,"after":memory()}));

@@ -1,14 +1,7 @@
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
   import * as api from '../../lib/ipc/client';
-  import type {
-    StashEntry,
-    StashAction,
-    StashPlan,
-    CommitFiles,
-    BranchChange,
-    WorkingStatus,
-  } from '../../lib/ipc/bindings';
+  import type { StashEntry, CommitFiles } from '../../lib/ipc/bindings';
   import DiffViewer from '../diff/DiffViewer.svelte';
   import FileList from '../diff/FileList.svelte';
   import BranchMenu from '../branches/BranchMenu.svelte';
@@ -16,29 +9,21 @@
     sessionId,
     generation,
     disabled,
-    onbusy,
-    onchanged,
   }: {
     sessionId: number;
     generation: number;
     disabled: boolean;
-    onbusy: (busy: boolean) => void;
-    onchanged: (result: BranchChange) => Promise<void>;
   } = $props();
   let entries = $state.raw<StashEntry[]>([]);
   let expanded = $state(true),
     loading = $state(false),
     busy = $state(false);
-  let observed = $state.raw<WorkingStatus | null>(null);
   let failure = $state(''),
-    result = $state(''),
     hasMore = $state(false);
   let selected = $state.raw<StashEntry | null>(null);
-  let intent = $state<'details' | 'create' | 'apply' | 'drop' | null>(null);
-  let plan = $state.raw<StashPlan | null>(null);
-  let message = $state(''),
-    includeUntracked = $state(false),
-    restoreIndex = $state(false);
+  let intent = $state<'details' | null>(null);
+  const policy =
+    'Somente leitura: criar, aplicar e excluir stash estão desabilitados nesta versão por segurança.';
   let layers = $state.raw<CommitFiles[]>([]),
     layerIndex = $state(0),
     fileIndex = $state<number | null>(null);
@@ -78,10 +63,9 @@
             e.selection.oid === selected!.selection.oid,
         )
       ) {
-        plan = null;
-        if (intent && !result)
+        if (intent)
           failure =
-            'A lista mudou externamente. Feche e selecione novamente antes de operar.';
+            'A lista mudou externamente. Feche e selecione novamente antes de inspecionar.';
       }
     } catch (e) {
       if (!disposed && g === generation && api.readableError(e).code !== 'Busy')
@@ -115,16 +99,10 @@
     focus = target ?? (document.activeElement as HTMLElement);
     selected = entry;
     intent = kind;
-    plan = null;
     failure = '';
-    result = '';
-    observed = null;
     layers = [];
     fileIndex = null;
     layerIndex = 0;
-    message = '';
-    includeUntracked = false;
-    restoreIndex = false;
     await tick();
     dialog?.showModal();
     dialog?.querySelector<HTMLElement>('input,button')?.focus();
@@ -177,68 +155,16 @@
   function close() {
     if (busy) return;
     intent = null;
-    plan = null;
     void tick().then(() => {
       if (focus?.isConnected) focus.focus();
       else
-        document
-          .querySelector<HTMLButtonElement>('[aria-label="Criar stash"]')
-          ?.focus();
+        (
+          document.querySelector<HTMLButtonElement>(
+            '.stash-entry:not(:disabled)',
+          ) ??
+          document.querySelector<HTMLButtonElement>('.stash-section .expand')
+        )?.focus();
     });
-  }
-  function action(): StashAction {
-    if (intent === 'create')
-      return { kind: 'create', message, includeUntracked };
-    if (!selected) throw Error('Seleção ausente');
-    return intent === 'drop'
-      ? { kind: 'drop', selection: selected.selection }
-      : { kind: 'apply', selection: selected.selection, restoreIndex };
-  }
-  async function review() {
-    busy = true;
-    failure = '';
-    plan = null;
-    try {
-      plan = (await api.prepareStash(sessionId, generation, action())).data;
-      await tick();
-      dialog?.querySelector<HTMLButtonElement>('[data-cancel]')?.focus();
-    } catch (e) {
-      failure = api.readableError(e).message;
-    } finally {
-      busy = false;
-    }
-  }
-  async function trust() {
-    busy = true;
-    try {
-      await api.setRepositoryTrust(sessionId, generation, true);
-      await review();
-    } catch (e) {
-      failure = api.readableError(e).message;
-    } finally {
-      busy = false;
-    }
-  }
-  async function execute() {
-    if (!plan || plan.block || busy) return;
-    const token = plan.token;
-    plan = null;
-    busy = true;
-    onbusy(true);
-    try {
-      const r = (await api.executeStash(sessionId, generation, token)).data;
-      result = r.message;
-      observed = r.snapshot?.data.status ?? null;
-      await onchanged(r);
-    } catch (e) {
-      result =
-        api.readableError(e).message +
-        ' Nenhuma repetição automática; feche e revise novamente.';
-    } finally {
-      busy = false;
-      onbusy(false);
-      void refresh();
-    }
   }
   function context(event: MouseEvent | KeyboardEvent, entry: StashEntry) {
     if (disabled || busy) return;
@@ -251,7 +177,7 @@
       entry,
     };
   }
-  function choose(kind: 'details' | 'apply' | 'drop') {
+  function choose(kind: 'details') {
     const entry = menu!.entry;
     menu = null;
     void open(kind, entry, focus ?? undefined);
@@ -267,14 +193,11 @@
       >{expanded ? '▾' : '▸'} STASHES
       <span class="count">{entries.length}{hasMore ? '+' : ''}</span></button
     >
-    <button
-      class="icon-button"
-      aria-label="Criar stash"
-      title="Criar stash"
-      disabled={disabled || busy}
-      onclick={(e) => open('create', null, e.currentTarget)}>+</button
+    <button class="icon-button" aria-label="Criar stash" title={policy} disabled
+      >+</button
     >
   </div>
+  <p class="stash-policy">{policy}</p>
   {#if expanded}
     <div class="stash-list" aria-busy={loading}>
       {#each entries.slice(0, shown) as entry, index (`${entry.selection.revision}:${entry.selection.index}`)}
@@ -311,17 +234,12 @@
       menu = null;
       focus?.focus();
     }}
-    items={[
-      { label: 'Visualizar stash', pick: () => choose('details') },
-      { label: 'Aplicar stash', pick: () => choose('apply') },
-      { label: 'Excluir stash', pick: () => choose('drop') },
-    ]}
+    items={[{ label: 'Visualizar stash', pick: () => choose('details') }]}
   />{/if}
 {#if intent}
   <dialog
     bind:this={dialog}
-    class="index-dialog stash-dialog"
-    class:details={intent === 'details'}
+    class="index-dialog stash-dialog details"
     aria-labelledby="stash-title"
     oncancel={(e) => {
       e.preventDefault();
@@ -329,15 +247,7 @@
       else close();
     }}
   >
-    <h2 id="stash-title">
-      {intent === 'create'
-        ? 'Criar stash'
-        : intent === 'apply'
-          ? 'Aplicar stash'
-          : intent === 'drop'
-            ? 'Excluir stash'
-            : 'Detalhes do stash'}
-    </h2>
+    <h2 id="stash-title">Detalhes do stash</h2>
     <div class="index-dialog-body">
       {#if selected}<p>
           <strong>{selected.reference} · {selected.message}</strong>
@@ -346,43 +256,7 @@
           {selected.timestamp} · {selected.branch ?? 'Branch não informada'}
         </p>
         <code class="oid">{selected.selection.oid}</code>{/if}
-      {#if intent === 'create'}
-        <label for="stash-message">Mensagem personalizada</label><input
-          id="stash-message"
-          bind:value={message}
-          maxlength="4096"
-          disabled={busy || !!result}
-          oninput={() => (plan = null)}
-        />
-        <label
-          ><input
-            type="checkbox"
-            bind:checked={includeUntracked}
-            disabled={busy || !!result}
-            onchange={() => (plan = null)}
-          /> Incluir untracked (ignored são preservados)</label
-        >
-        <p>
-          Inclui alterações tracked staged e unstaged. Após o armazenamento
-          bem-sucedido, os arquivos incluídos serão retirados do working tree.
-        </p>
-      {:else if intent === 'apply'}
-        <label
-          ><input
-            type="checkbox"
-            bind:checked={restoreIndex}
-            disabled={busy || !!result}
-            onchange={() => (plan = null)}
-          /> Restaurar também o index (--index)</label
-        >
-        <p>
-          O stash será mantido. A aplicação pode produzir conflitos; revise o
-          estado real após a tentativa.
-        </p>
-      {:else if intent === 'drop'}<p>
-          Esta entrada será excluída do reflog. Confirme a referência e o OID
-          acima; a ação não possui recuperação automática.
-        </p>{/if}
+      <p>{policy}</p>
       {#if intent === 'details' && layers.length}
         <div class="layer-tabs" aria-label="Camada do stash">
           {#each layers as l, i}<button
@@ -413,67 +287,19 @@
             </p>{/if}
         {/if}
       {/if}
-      {#if plan}<p>Arquivos abrangidos ({plan.paths.length}):</p>
-        <ul>
-          {#each plan.paths as path}<li><code>{path}</code></li>{/each}
-        </ul>
-        {#if plan.block}<p role="status">
-            {plan.block}
-          </p>{/if}{#if !plan.trusted}<button
-            class="toolbar-button"
-            disabled={busy}
-            onclick={trust}>Confiar neste repositório</button
-          >{/if}{/if}
-      {#if busy}<p role="status">Verificando estado do Git…</p>{/if}
+      {#if busy}<p role="status">Lendo stash…</p>{/if}
       {#if failure}<p role="alert">{failure}</p>{/if}
-      {#if result}<p class="stash-result" role="status">{result}</p>{/if}
-      {#if observed}
-        <div class="stash-observed" role="status">
-          Estado observado: {observed.staged} preparadas · {observed.modified} modificadas
-          · {observed.untracked} untracked · {observed.conflicts} conflitos.
-          {#if observed.changes.length}<ul>
-              {#each observed.changes as change}<li>
-                  <code>{change.path}</code>
-                </li>{/each}
-            </ul>{/if}
-          {#if observed.hasMoreChanges}<p>
-              Lista de alterações limitada; confira o painel de alterações
-              locais.
-            </p>{/if}
-        </div>
-      {/if}
     </div>
     <div class="index-dialog-actions">
-      <button class="toolbar-button" data-cancel disabled={busy} onclick={close}
-        >{result || intent === 'details' ? 'Fechar' : 'Cancelar'}</button
+      <button class="toolbar-button" disabled={busy} onclick={close}
+        >Fechar</button
       >
-      {#if intent === 'details' && selected && !busy && !failure}<button
-          class="toolbar-button"
-          onclick={() => {
-            intent = 'apply';
-            plan = null;
-          }}>Aplicar stash</button
-        ><button
-          class="toolbar-button"
-          onclick={() => {
-            intent = 'drop';
-            plan = null;
-          }}>Excluir stash</button
-        >
-      {:else if intent !== 'details' && !result}{#if plan && !plan.block}<button
-            class="primary-button"
-            disabled={busy}
-            onclick={execute}
-            >Confirmar {intent === 'create'
-              ? 'criação'
-              : intent === 'apply'
-                ? 'aplicação'
-                : 'exclusão'}</button
-          >{:else}<button
-            class="primary-button"
-            disabled={busy}
-            onclick={review}>Revisar operação</button
-          >{/if}{/if}
+      <button class="toolbar-button" disabled title={policy}
+        >Aplicar stash</button
+      >
+      <button class="toolbar-button" disabled title={policy}
+        >Excluir stash</button
+      >
     </div>
     {#if file && layer && intent === 'details'}<div class="stash-diff">
         {#key `${layer.oid}:${file.index}`}<DiffViewer
@@ -547,23 +373,10 @@
     font-size: 11px;
     margin: 8px 0;
   }
-  input:not([type='checkbox']) {
-    display: block;
-    width: 100%;
-    padding: 8px;
-    margin: 8px 0;
-    background: var(--bg);
-    border: 1px solid var(--line);
-    color: var(--text-strong);
-  }
-  label {
-    display: block;
-    margin: 10px 0;
-  }
-  ul {
-    max-height: 150px;
-    overflow: auto;
-    overflow-wrap: anywhere;
+  .stash-policy {
+    color: var(--muted);
+    font-size: 11px;
+    margin: 6px 10px;
   }
   .layer-tabs {
     display: flex;

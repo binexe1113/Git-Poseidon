@@ -377,7 +377,7 @@ fn branch_applied(action: &BranchAction, before: &BranchState, state: &BranchSta
     }
 }
 
-pub(super) fn status_paths(status: &[u8]) -> Vec<Vec<u8>> {
+fn status_paths(status: &[u8]) -> Vec<Vec<u8>> {
     let mut paths = Vec::new();
     let mut records = status.split(|b| *b == 0);
     while let Some(record) = records.next() {

@@ -12,12 +12,12 @@ Cliente Git desktop experimental com Rust, Tauri 2 e Svelte/TypeScript.
 - Diffs de commits e alterações locais; stage e unstage por arquivo.
 - Criação de commits a partir do index revisado.
 - Branches locais: criar, trocar com `git switch`, renomear e excluir branches integradas.
-- Stashes: listar, inspecionar diffs tracked/index/untracked, criar, aplicar com index opcional e excluir individualmente, com revisão e confirmação.
+- Stashes em modo somente leitura: listar, inspecionar metadados e consultar diffs tracked/index/untracked.
 - Confiança explícita por repositório, autorização separada de hooks e verificação de seleções obsoletas, locks e worktrees.
 
 A versão em desenvolvimento é **0.2.0-alpha**. Não há merge, rebase ou operações remotas. Linux foi validado; Windows e macOS ainda precisam de validação. O consumo de memória do WebKit continua em investigação.
 
-Stash é experimental e **ainda não está pronto para merge**: a prévia bloqueia hooks/filtros externos, drivers de merge, sparse checkout/index e submódulos. As revalidações não são uma transação com outros processos. Uma alteração concorrente do reflog pode fazer `drop` excluir outra entrada; mudanças tardias de configuração podem escapar à inspeção de hooks/filtros. `apply` usa o OID revisado, mantém o stash e pode deixar conflitos ou efeitos parciais. Não há repetição nem rollback automático. Evite escritores externos durante operações de Stash.
+Stash está disponível **somente para leitura** nesta versão. Criar, aplicar (inclusive `--index`) e excluir estão desabilitados na interface e recusados pelo backend antes de iniciar qualquer comando Git. A exclusão nativa por posição não garante a identidade da entrada sob concorrência externa, e a inspeção prévia de configuração não impede hooks/filtros/drivers introduzidos na última janela. As escritas só poderão voltar com garantias demonstradas para esses casos; nenhuma política parcial de desativação de hooks é apresentada como isolamento completo. A listagem pode mudar por ações externas; seleções obsoletas exigem nova inspeção.
 
 ## Desenvolvimento
 
