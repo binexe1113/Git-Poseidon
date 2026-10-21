@@ -224,7 +224,9 @@ try {
     await click(label, scope);
     await wait(`!!document.querySelector('.stash-dialog .file-item')`);
     await ev(`document.querySelector('.stash-dialog .file-item').click();true`);
-    await wait(`!!document.querySelector('.stash-diff')`);
+    await wait(
+      `document.querySelector('.stash-diff')?.textContent.includes(${JSON.stringify(label === 'Untracked' ? 'new' : 'staged')})`,
+    );
     assert.ok(
       await ev(
         `document.querySelector('.stash-diff').textContent.includes(${JSON.stringify(label === 'Untracked' ? 'new' : 'staged')})`,
