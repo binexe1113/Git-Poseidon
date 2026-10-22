@@ -1,5 +1,6 @@
 <script lang="ts">
   import StashPanel from './features/stash/StashPanel.svelte';
+  import WorktreePanel from './features/worktrees/WorktreePanel.svelte';
   import { onMount, tick } from 'svelte';
   import Icon from './lib/ui/Icon.svelte';
   import BranchDialog from './features/branches/BranchDialog.svelte';
@@ -782,7 +783,12 @@
     }
   }
 
-  async function load(path?: string) {
+  /** `target`: a path to open, a request that returns the next session, or
+   * nothing to refresh. `onFailure` keeps a refusal local to its caller. */
+  async function load(
+    target?: string | (() => Promise<SnapshotResponse>),
+    onFailure?: (failure: AppError) => void,
+  ): Promise<boolean> {
     if (
       indexBusy ||
       commitBusy ||
@@ -791,7 +797,7 @@
       branchIntent ||
       branchMenu
     )
-      return;
+      return false;
     const epoch = ++repoEpoch;
     ++selectionEpoch;
     loading = true;
@@ -799,10 +805,13 @@
     error = null;
     await detailQueue;
     try {
-      const response = path
-        ? await api.openRepository(path)
-        : await api.refreshRepository(snapshot!.sessionId);
-      if (epoch !== repoEpoch) return;
+      const response =
+        typeof target === 'function'
+          ? await target()
+          : target
+            ? await api.openRepository(target)
+            : await api.refreshRepository(snapshot!.sessionId);
+      if (epoch !== repoEpoch) return false;
       if (response.schemaVersion !== 2) throw new Error('Unsupported schema');
       const previous = selected?.oid;
       snapshot = response;
@@ -828,11 +837,31 @@
       );
       const next = response.data.commits[index];
       if (next) selectCommit(next, 0, response.data.graph[index]?.refs ?? []);
+      return true;
     } catch (cause) {
-      if (epoch === repoEpoch) error = api.readableError(cause);
+      if (epoch === repoEpoch) {
+        if (onFailure) onFailure(api.readableError(cause));
+        else error = api.readableError(cause);
+      }
+      return false;
     } finally {
       if (epoch === repoEpoch) loading = false;
     }
+  }
+
+  /** Navigation to a listed worktree; the backend re-checks it before opening. */
+  function openWorktree(
+    revision: number,
+    key: number,
+    onFailure: (failure: AppError) => void,
+  ): Promise<boolean> {
+    const context = snapshot;
+    if (!context) return Promise.resolve(false);
+    return load(
+      () =>
+        api.openWorktree(context.sessionId, context.generation, revision, key),
+      onFailure,
+    );
   }
 
   function fetchHistory(offset: number): Promise<HistoryPage> {
@@ -976,6 +1005,21 @@
       >
     </div>
 
+    {#if snapshot}
+      {#key snapshot.sessionId}
+        <WorktreePanel
+          sessionId={snapshot.sessionId}
+          generation={snapshot.generation}
+          disabled={loading ||
+            branchBusy ||
+            commitBusy ||
+            !!indexBusy ||
+            !!branchIntent ||
+            !!indexDialog}
+          onopen={openWorktree}
+        />
+      {/key}
+    {/if}
     <div class="sidebar-rule"></div>
     {#if snapshot}
       {#key snapshot.sessionId}

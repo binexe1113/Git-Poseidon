@@ -23,6 +23,9 @@ fn main() {
             "prepare_commit",
             "create_commit",
             "set_commit_hook_trust",
+            "list_worktrees",
+            "get_worktree_status",
+            "open_worktree",
             "runtime_probe",
         ]),
     ))

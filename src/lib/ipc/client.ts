@@ -232,3 +232,32 @@ export function executeStash(
 ): Promise<import('./bindings').BranchChangeResponse> {
   return invoke('execute_stash', { sessionId, generation, token });
 }
+
+export function listWorktrees(
+  sessionId: number,
+  generation: number,
+): Promise<import('./bindings').WorktreeListResponse> {
+  return invoke('list_worktrees', { sessionId, generation });
+}
+export function getWorktreeStatus(
+  sessionId: number,
+  generation: number,
+  revision: number,
+  key: number,
+): Promise<import('./bindings').WorktreeStatusResponse> {
+  return invoke('get_worktree_status', {
+    sessionId,
+    generation,
+    revision,
+    key,
+  });
+}
+/** Navigation only: the backend re-checks the listed worktree before opening it. */
+export function openWorktree(
+  sessionId: number,
+  generation: number,
+  revision: number,
+  key: number,
+): Promise<SnapshotResponse> {
+  return invoke('open_worktree', { sessionId, generation, revision, key });
+}
