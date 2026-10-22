@@ -359,7 +359,12 @@ impl Git {
         if guard_state.reference.as_deref() == Some(source.as_bytes()) {
             guard_state.ref_lock.take();
         }
-        context.guard_reference(&self.process.executable, &source)?;
+        context.guard_reference(
+            &self.process.executable,
+            &source,
+            location,
+            &state.worktrees,
+        )?;
         let old_log = execution::optional_log(&location.common_dir.join("logs").join(&source))?;
         context.guard_reflog(
             location,

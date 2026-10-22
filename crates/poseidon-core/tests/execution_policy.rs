@@ -449,6 +449,75 @@ async fn rename_preserves_existing_history_and_respects_disabled_reflogs() {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn authorized_rename_hook_runs_before_destination_history_is_seeded() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.write("a", "base\n");
+    let oid = f.commit("base");
+    f.git(&["branch", "victim"]);
+    let before = std::fs::read(f.root.join(".git/logs/refs/heads/victim")).unwrap();
+    f.write(
+        ".git/hooks/reference-transaction",
+        "#!/bin/sh\nif [ \"$1\" = prepared ]; then\n test -e .git/logs/refs/heads/renamed && echo seeded >> ../seen\n echo ran >> ../seen\nfi\n",
+    );
+    std::fs::set_permissions(
+        f.root.join(".git/hooks/reference-transaction"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let (s, id, g) = open(&f).await;
+    s.set_branch_hook_trust(id, g, true).await.unwrap();
+    let plan = s
+        .prepare_branch(
+            id,
+            g,
+            BranchAction::Rename {
+                name: "victim".into(),
+                expected_oid: oid.clone(),
+                new_name: "renamed".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .data;
+    assert!(plan.block.is_none(), "{:?}", plan.block);
+    assert_eq!(
+        s.execute_branch(id, g, plan.token)
+            .await
+            .unwrap()
+            .data
+            .outcome,
+        BranchOutcome::Applied
+    );
+    // The authorized hook ran once and saw no destination history yet.
+    assert_eq!(
+        std::fs::read_to_string(f.temp.path().join("seen")).unwrap(),
+        "ran\n"
+    );
+    // Ref and reflog moved together: old history plus exactly one rename entry.
+    let after = std::fs::read(f.root.join(".git/logs/refs/heads/renamed")).unwrap();
+    assert!(after.starts_with(&before));
+    assert_eq!(
+        after[before.len()..]
+            .iter()
+            .filter(|b| **b == b'\n')
+            .count(),
+        1
+    );
+    assert!(!f.root.join(".git/logs/refs/heads/victim").exists());
+    assert!(!f
+        .output(&["show-ref", "--verify", "--quiet", "refs/heads/victim"])
+        .status
+        .success());
+    assert_eq!(f.git(&["rev-parse", "refs/heads/renamed"]), oid);
+    assert_eq!(
+        f.git(&["reflog", "-1", "--format=%H", "refs/heads/renamed"]),
+        oid
+    );
+}
+
 #[tokio::test]
 async fn current_rename_keeps_head_reflog_at_a_real_commit() {
     let f = Fixture::new();
