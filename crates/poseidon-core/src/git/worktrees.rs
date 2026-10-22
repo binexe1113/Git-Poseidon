@@ -128,8 +128,9 @@ pub(crate) struct Entry {
     pub availability: WorktreeAvailability,
     pub reason: Option<&'static str>,
     pub git_dir: Option<PathBuf>,
-    /// dev/inode of the checkout root and of its Git directory.
-    pub stamp: Option<[u64; 4]>,
+    /// dev, inode and birth time of the checkout root and of its Git directory.
+    /// Inodes alone are reused when a directory is recreated (seen on ext4).
+    pub stamp: Option<[u64; 6]>,
 }
 
 pub(crate) struct Registry {
@@ -171,19 +172,36 @@ fn target(base: &Path, bytes: &[u8]) -> Option<PathBuf> {
     base.join(path).canonicalize().ok()
 }
 
-pub(crate) fn stamp(root: &Path, git_dir: &Path) -> Option<[u64; 4]> {
+/// `None` without a birth time: identity is then not verifiable and the entry
+/// cannot be opened, as for repository trust (trust.rs).
+pub(crate) fn stamp(root: &Path, git_dir: &Path) -> Option<[u64; 6]> {
     let (root, git) = (
         std::fs::symlink_metadata(root).ok()?,
         std::fs::symlink_metadata(git_dir).ok()?,
     );
+    let born = |m: &std::fs::Metadata| -> Option<u64> {
+        let d = m
+            .created()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        u64::try_from(d.as_nanos()).ok()
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Some([root.dev(), root.ino(), git.dev(), git.ino()])
+        Some([
+            root.dev(),
+            root.ino(),
+            born(&root)?,
+            git.dev(),
+            git.ino(),
+            born(&git)?,
+        ])
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, git);
+        let _ = (root, git, born);
         None
     }
 }
