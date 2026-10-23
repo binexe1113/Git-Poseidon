@@ -668,3 +668,100 @@ pub struct StashDetailsResponse {
     pub generation: u32,
     pub data: Vec<CommitFiles>,
 }
+
+/// How a listed worktree relates to the repository (T23-B1, read-only).
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeKind {
+    Main,
+    Bare,
+    Linked,
+}
+/// Whether a listed worktree can be opened. Only `available` entries can.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeAvailability {
+    /// Registered, present, and its `.git` link and admin directory agree.
+    Available,
+    /// Git reports it as prunable, or the directory no longer exists.
+    Missing,
+    /// `git worktree add` is running or was interrupted (`locked: initializing`).
+    Initializing,
+    /// The directory exists, but its link, admin directory or path disagree.
+    Inconsistent,
+    /// The directory or its link could not be read.
+    Inaccessible,
+}
+/// One registry entry as read now. Paths are display text only: selection
+/// goes through `key` + list `revision`, never through a path.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Worktree {
+    pub key: u32,
+    pub kind: WorktreeKind,
+    pub name: String,
+    pub path: String,
+    pub current: bool,
+    pub head: Option<String>,
+    pub branch: Option<String>,
+    pub detached: bool,
+    /// Administrative `git worktree lock` state; it does not block Git operations.
+    pub locked: bool,
+    pub lock_reason: Option<String>,
+    pub prunable: Option<String>,
+    pub availability: WorktreeAvailability,
+    /// Why the entry cannot be opened, when it cannot.
+    pub reason: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeList {
+    pub revision: u32,
+    pub worktrees: Vec<Worktree>,
+    /// More than the listing limit are registered.
+    pub truncated: bool,
+    /// Base trust of the shared repository identity.
+    pub trusted: bool,
+    pub elapsed_ms: u32,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeListResponse {
+    pub schema_version: u32,
+    pub session_id: u32,
+    pub generation: u32,
+    pub data: WorktreeList,
+}
+/// Effective filter permission of one worktree, separate from repository trust.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeFilters {
+    /// No filter driver is configured for this worktree.
+    None,
+    /// Its filter definitions match the ones approved for the repository.
+    Authorized,
+    /// Filters are configured but not approved: writes there require a new review.
+    ReviewRequired,
+}
+/// Protected status of one worktree: counts only, read with neutralised filters.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeStatus {
+    pub key: u32,
+    pub staged: u32,
+    pub modified: u32,
+    pub untracked: u32,
+    pub conflicts: u32,
+    pub has_more_changes: bool,
+    pub trusted: bool,
+    pub filters: WorktreeFilters,
+}
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeStatusResponse {
+    pub schema_version: u32,
+    pub session_id: u32,
+    pub generation: u32,
+    pub revision: u32,
+    pub data: WorktreeStatus,
+}

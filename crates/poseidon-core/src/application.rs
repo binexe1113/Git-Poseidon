@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 mod branches;
 mod creation;
 mod stash;
+mod worktrees;
 
 #[derive(Clone)]
 struct Session {
@@ -46,6 +47,8 @@ pub struct RepositoryService {
     branch_plan: Mutex<Option<branches::PreparedBranch>>,
     stash_listing: Mutex<Option<stash::Listing>>,
     stash_queries: Semaphore,
+    worktree_listing: Mutex<Option<worktrees::Listing>>,
+    worktree_queries: Semaphore,
 }
 
 /// Commit diffs read immutable objects, so they do not wait for history queries.
@@ -229,6 +232,8 @@ impl RepositoryService {
             branch_plan: Mutex::new(None),
             stash_listing: Mutex::new(None),
             stash_queries: Semaphore::new(1),
+            worktree_listing: Mutex::new(None),
+            worktree_queries: Semaphore::new(1),
             next_plan: AtomicU32::new(1),
             active: Mutex::new(None),
             next_id: AtomicU32::new(1),
@@ -303,6 +308,16 @@ impl RepositoryService {
         let git = Git::discover()?;
         git.installation().await?;
         let location = git.locate(path).await?;
+        let (session, history) = self.read_session(&git, location).await?;
+        self.install(session, history).await
+    }
+
+    /// Everything a new session shows, read before it replaces the active one.
+    async fn read_session(
+        &self,
+        git: &Git,
+        location: RepositoryLocation,
+    ) -> Result<(Session, History)> {
         let mut history = History::new(git.clone(), location.clone()).await?;
         let mut snapshot = git.snapshot(&location, self.trusted(&location)).await?;
         apply_page(&mut snapshot, history.page(0).await?);
@@ -312,9 +327,15 @@ impl RepositoryService {
             location,
             snapshot,
         };
+        Ok((session, history))
+    }
+
+    async fn install(&self, session: Session, history: History) -> Result<SnapshotResponse> {
         let response = response(&session);
         *self.active.lock().map_err(|_| busy())? = Some(session);
         *self.history.lock().await = Some(history);
+        // A worktree listing belongs to the session it was read for.
+        *self.worktree_listing.lock().map_err(|_| busy())? = None;
         Ok(response)
     }
 

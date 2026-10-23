@@ -2,6 +2,7 @@ pub(crate) mod branches;
 pub(crate) mod commit;
 pub(crate) mod execution;
 pub(crate) mod stash;
+pub(crate) mod worktrees;
 use crate::{
     diff,
     domain::*,
@@ -376,7 +377,7 @@ impl Git {
         Ok((fingerprint, ordered, labels))
     }
 
-    async fn working_status(
+    pub(crate) async fn working_status(
         &self,
         location: &RepositoryLocation,
         trusted: bool,

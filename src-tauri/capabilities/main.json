@@ -27,6 +27,9 @@
     "allow-set-branch-hook-trust",
     "allow-prepare-commit",
     "allow-create-commit",
-    "allow-set-commit-hook-trust"
+    "allow-set-commit-hook-trust",
+    "allow-list-worktrees",
+    "allow-get-worktree-status",
+    "allow-open-worktree"
   ]
 }

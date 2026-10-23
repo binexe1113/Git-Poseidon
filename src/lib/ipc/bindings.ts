@@ -8,6 +8,30 @@ export type StashAction = { "kind": "create", message: string, includeUntracked:
 export type StashPlan = { token: number, action: StashAction, paths: Array<string>, trusted: boolean, block: string | null, };
 export type StashPlanResponse = { schemaVersion: number, sessionId: number, generation: number, data: StashPlan, };
 export type StashDetailsResponse = { schemaVersion: number, sessionId: number, generation: number, data: Array<CommitFiles>, };
+export type WorktreeKind = "main" | "bare" | "linked";
+export type WorktreeAvailability = "available" | "missing" | "initializing" | "inconsistent" | "inaccessible";
+export type Worktree = { key: number, kind: WorktreeKind, name: string, path: string, current: boolean, head: string | null, branch: string | null, detached: boolean,
+/**
+ * Administrative `git worktree lock` state; it does not block Git operations.
+ */
+locked: boolean, lockReason: string | null, prunable: string | null, availability: WorktreeAvailability,
+/**
+ * Why the entry cannot be opened, when it cannot.
+ */
+reason: string | null, };
+export type WorktreeList = { revision: number, worktrees: Array<Worktree>,
+/**
+ * More than the listing limit are registered.
+ */
+truncated: boolean,
+/**
+ * Base trust of the shared repository identity.
+ */
+trusted: boolean, elapsedMs: number, };
+export type WorktreeListResponse = { schemaVersion: number, sessionId: number, generation: number, data: WorktreeList, };
+export type WorktreeFilters = "none" | "authorized" | "reviewRequired";
+export type WorktreeStatus = { key: number, staged: number, modified: number, untracked: number, conflicts: number, hasMoreChanges: boolean, trusted: boolean, filters: WorktreeFilters, };
+export type WorktreeStatusResponse = { schemaVersion: number, sessionId: number, generation: number, revision: number, data: WorktreeStatus, };
 export type BranchAction = { "kind": "create", name: string, startOid: string, } | { "kind": "switch", name: string, expectedOid: string, } | { "kind": "rename", name: string, expectedOid: string, newName: string, } | { "kind": "delete", name: string, expectedOid: string, };
 export type BranchPlan = { token: number, action: BranchAction, hooks: Array<string>, filters: Array<string>, trusted: boolean, hooksTrusted: boolean, dirtyPaths: Array<string>, block: string | null, };
 export type BranchPlanResponse = { schemaVersion: number, sessionId: number, generation: number, data: BranchPlan, };
